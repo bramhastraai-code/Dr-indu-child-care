@@ -40,7 +40,6 @@ const spec = {
 3. Expand any endpoint → **Try it out** → **Execute**.
         `,
     },
-    servers: [{ url: 'http://localhost:5000', description: 'Local Development' }],
     components: {
         securitySchemes: {
             bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }
