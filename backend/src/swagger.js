@@ -26,6 +26,20 @@ const queryParam = (name, def, enumVals, required = false) => ({
         : { type: 'string', default: def }
 });
 
+const getSwaggerServers = () => {
+    const explicitUrl = process.env.PUBLIC_API_URL || process.env.SWAGGER_SERVER_URL;
+    if (explicitUrl) {
+        return [{ url: explicitUrl, description: 'Configured Server' }];
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+        // Relative URL keeps docs and API on the same origin in hosted environments.
+        return [{ url: '/', description: 'Production' }];
+    }
+
+    return [{ url: `http://localhost:${process.env.PORT || 5000}`, description: 'Local Development' }];
+};
+
 const spec = {
     openapi: '3.0.0',
     info: {
@@ -40,6 +54,7 @@ const spec = {
 3. Expand any endpoint → **Try it out** → **Execute**.
         `,
     },
+    servers: getSwaggerServers(),
     components: {
         securitySchemes: {
             bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }
