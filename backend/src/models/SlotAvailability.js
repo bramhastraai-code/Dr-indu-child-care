@@ -18,6 +18,12 @@ const SlotAvailabilitySchema = new mongoose.Schema({
         type: String,
         required: true
     },
+    doctor_id: {
+        type: String,
+        ref: 'Doctor',
+        default: null,
+        index: true
+    },
     is_booked: {
         type: Boolean,
         default: false
@@ -59,7 +65,8 @@ const SlotAvailabilitySchema = new mongoose.Schema({
 });
 
 // Compound unique index
-SlotAvailabilitySchema.index({ slot_id: 1, slot_date: 1, doctor_type: 1 }, { unique: true });
+// Compound unique index - allowing multiple slots if doctor_id is different
+SlotAvailabilitySchema.index({ slot_id: 1, slot_date: 1, doctor_type: 1, doctor_id: 1 }, { unique: true });
 
 // Pre-save: keep 'date' and 'slot_date' in sync (Mongoose 9 async style)
 SlotAvailabilitySchema.pre('save', function () {

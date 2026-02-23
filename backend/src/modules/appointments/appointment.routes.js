@@ -19,8 +19,6 @@ const {
 const validate = require('../../middleware/validate');
 const { create, bookWhatsapp, update } = require('./appointment.validator');
 const Joi = require('joi');
-const authorize = require('../../middleware/rbac');
-const auth = require('../../middleware/auth');
 const rateLimit = require('express-rate-limit');
 
 const whatsappLimiter = rateLimit({
@@ -30,17 +28,6 @@ const whatsappLimiter = rateLimit({
     message: { success: false, error_code: 'BOT_RATE_LIMIT', message: 'Rate limit exceeded for this WhatsApp ID' }
 });
 
-// 1. PUBLIC ROUTES (No Auth / No JWT)
-router.post('/form', validate(create.keys({ mobile: Joi.string().regex(/^\d{10}$/).required(), patient_id: Joi.optional() })), bookByForm);
-router.get('/by-mobile/:mobile', getAppointmentsByMobile);
-router.get('/by-wa/:wa_id', getAppointmentsByWaId);
-router.post('/whatsapp', whatsappLimiter, validate(bookWhatsapp), bookByWhatsapp);
-router.get('/reminders/pending-24h', getPending24hReminders);
-router.patch('/reminders/:appointment_id/mark-sent', markReminderSent);
-
-// 2. PROTECTED ROUTES (Require JWT or API Key)
-router.use(auth);
-
 /**
  * @openapi
  * tags:
@@ -48,24 +35,22 @@ router.use(auth);
  *     description: Appointment booking, cancellation, rescheduling and lookup
  */
 
+// All routes are now public for external integrations like n8n
+router.post('/form', validate(create.keys({ mobile: Joi.string().regex(/^\d{10}$/).required(), patient_id: Joi.optional() })), bookByForm);
+router.get('/by-mobile/:mobile', getAppointmentsByMobile);
+router.get('/by-wa/:wa_id', getAppointmentsByWaId);
+router.post('/whatsapp', whatsappLimiter, validate(bookWhatsapp), bookByWhatsapp);
+router.get('/reminders/pending-24h', getPending24hReminders);
+router.patch('/reminders/:appointment_id/mark-sent', markReminderSent);
+
 /**
  * @openapi
  * /api/appointments/stats:
  *   get:
  *     summary: Appointment stats for a given date (defaults to today)
  *     tags: [Appointments]
- *     parameters:
- *       - in: query
- *         name: date
- *         schema:
- *           type: string
- *           format: date
- *         description: "Date to fetch stats for (YYYY-MM-DD, defaults to today)"
- *     responses:
- *       200:
- *         description: Stats object with totals by status and booking source
  */
-router.get('/stats', authorize(['superadmin', 'admin', 'staff']), getAppointmentStats);
+router.get('/stats', getAppointmentStats);
 
 /**
  * @openapi
@@ -74,55 +59,14 @@ router.get('/stats', authorize(['superadmin', 'admin', 'staff']), getAppointment
  *     summary: All appointments for today (shortcut)
  *     tags: [Appointments]
  */
-router.get('/today', authorize(['superadmin', 'admin', 'staff']), getTodayAppointments);
+router.get('/today', getTodayAppointments);
 
-/**
- * @openapi
- * /api/appointments/by-mobile/{mobile}:
- *   get:
- *     summary: Get upcoming appointments by patient mobile number
- *     tags: [Appointments]
- *     parameters:
- *       - in: path
- *         name: mobile
- *         required: true
- *         schema:
- *           type: string
- *         description: Patient mobile number or wa_id
- *     responses:
- *       200:
- *         description: List of upcoming appointments for this patient
- *       404:
- *         description: No patient found for this mobile
- */
 /**
  * @openapi
  * /api/appointments:
  *   get:
  *     summary: List appointments with filters
  *     tags: [Appointments]
- *     parameters:
- *       - in: query
- *         name: date
- *         schema: { type: string, format: date }
- *       - in: query
- *         name: patient_id
- *         schema: { type: string }
- *       - in: query
- *         name: status
- *         schema: { type: string, enum: [BOOKED, CONFIRMED, COMPLETED, CANCELLED, NO_SHOW] }
- *       - in: query
- *         name: source
- *         schema: { type: string, enum: [dashboard, whatsapp, form, api] }
- *       - in: query
- *         name: page
- *         schema: { type: integer, default: 1 }
- *       - in: query
- *         name: limit
- *         schema: { type: integer, default: 50 }
- *     responses:
- *       200:
- *         description: Paginated list of appointments
  */
 router.get('/', getAppointments);
 
@@ -132,118 +76,15 @@ router.get('/', getAppointments);
  *   post:
  *     summary: Book a new appointment (all channels)
  *     tags: [Appointments]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [appointment_date, slot_id, doctor_type, booking_source]
- *             properties:
- *               patient_id:
- *                 type: string
- *                 description: Required for dashboard / form / api sources
- *                 example: "DICC-2026-0016"
- *               mobile:
- *                 type: string
- *                 description: Required for whatsapp source (alternative to patient_id)
- *                 example: "9876543210"
- *               wa_id:
- *                 type: string
- *                 description: WhatsApp ID (alternative to mobile for whatsapp source)
- *               doctor_type:
- *                 type: string
- *                 enum: [PULMONARY, NON_PULMONARY, VACCINATION]
- *               visit_type:
- *                 type: string
- *                 enum: [CONSULTATION, VACCINATION, PULMONARY, FOLLOWUP]
- *               appointment_mode:
- *                 type: string
- *                 enum: [OFFLINE, ONLINE]
- *               appointment_date:
- *                 type: string
- *                 format: date
- *                 example: "2026-06-15"
- *               slot_id:
- *                 type: string
- *                 example: "S1"
- *               reason:
- *                 type: string
- *                 example: "Fever follow-up"
- *               booking_source:
- *                 type: string
- *                 enum: [dashboard, whatsapp, form, api]
- *                 example: "dashboard"
- *     responses:
- *       201:
- *         description: Appointment confirmed
- *       400:
- *         description: Missing or invalid fields
- *       404:
- *         description: Patient not found
- *       409:
- *         description: Slot already booked or patient already has appointment today
  */
 router.post('/', validate(create), createAppointment);
 
-/**
- * @openapi
- * /api/appointments/whatsapp:
- *   post:
- *     summary: Book via WhatsApp bot (identified by wa_id)
- *     tags: [Appointments]
- *     description: |
- *       Dedicated WhatsApp bot endpoint. wa_id is normalized (strips @c.us suffix,
- *       extracts 10-digit mobile from country code). Patient MUST be pre-registered.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [wa_id, appointment_date, slot_id, doctor_type]
- *             properties:
- *               wa_id:
- *                 type: string
- *                 example: "919876543210@c.us"
- *               doctor_type:
- *                 type: string
- *                 enum: [PULMONARY, NON_PULMONARY, VACCINATION]
- *               visit_type:
- *                 type: string
- *                 enum: [CONSULTATION, VACCINATION, PULMONARY, FOLLOWUP]
- *               appointment_date:
- *                 type: string
- *                 format: date
- *                 example: "2026-06-15"
- *               slot_id:
- *                 type: string
- *                 example: "S1"
- *               reason:
- *                 type: string
- *     responses:
- *       201:
- *         description: Appointment confirmed
- *       409:
- *         description: Not registered / slot taken / already booked today
- */
 /**
  * @openapi
  * /api/appointments/{appointment_id}:
  *   get:
  *     summary: Get a single appointment by ID
  *     tags: [Appointments]
- *     parameters:
- *       - in: path
- *         name: appointment_id
- *         required: true
- *         schema: { type: string }
- *         example: "APT-2026-00001"
- *     responses:
- *       200:
- *         description: Appointment details with enriched patient and slot info
- *       404:
- *         description: Appointment not found
  */
 router.get('/:appointment_id', getAppointmentById);
 
@@ -253,30 +94,8 @@ router.get('/:appointment_id', getAppointmentById);
  *   patch:
  *     summary: Update / reschedule an appointment
  *     tags: [Appointments]
- *     parameters:
- *       - in: path
- *         name: appointment_id
- *         required: true
- *         schema: { type: string }
- *     requestBody:
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               appointment_date: { type: string, format: date }
- *               slot_id:          { type: string }
- *               doctor_type:      { type: string }
- *               visit_type:       { type: string }
- *               appointment_mode: { type: string }
- *               reason:           { type: string }
- *     responses:
- *       200:
- *         description: Appointment updated
- *       409:
- *         description: Target slot already booked
  */
-router.patch('/:appointment_id', authorize(['superadmin', 'admin', 'staff']), validate(update), updateAppointment);
+router.patch('/:appointment_id', validate(update), updateAppointment);
 
 /**
  * @openapi
@@ -284,29 +103,6 @@ router.patch('/:appointment_id', authorize(['superadmin', 'admin', 'staff']), va
  *   patch:
  *     summary: Cancel an appointment (dashboard or WhatsApp bot)
  *     tags: [Appointments]
- *     parameters:
- *       - in: path
- *         name: appointment_id
- *         required: true
- *         schema: { type: string }
- *     requestBody:
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               cancellation_reason: { type: string, example: "Parent unavailable" }
- *               cancelled_by:
- *                 type: string
- *                 enum: [whatsapp, dashboard, system]
- *                 default: dashboard
- *     responses:
- *       200:
- *         description: Appointment cancelled, slot freed
- *       404:
- *         description: Appointment not found
- *       409:
- *         description: Already cancelled
  */
 router.patch('/:appointment_id/cancel', cancelAppointment);
 

@@ -4,23 +4,37 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const audit = require('../../utils/audit');
 
-/**
- * Generate Access Token (15m)
- */
-const generateAccessToken = (user) => {
-    return jwt.sign(
-        { id: user._id, username: user.username, role: user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: '15m' }
-    );
+// Session/token lifetime configuration
+// ACCESS_TOKEN_EXPIRES_IN:
+// - set to "never" (default) for no auto logout until explicit logout
+// - or any jsonwebtoken value like "15m", "24h", "7d"
+const ACCESS_TOKEN_EXPIRES_IN = (process.env.ACCESS_TOKEN_EXPIRES_IN || 'never').trim();
+const REFRESH_TOKEN_TTL_DAYS = Number.parseInt(process.env.REFRESH_TOKEN_TTL_DAYS || '3650', 10);
+
+const getRefreshTokenExpiry = () => {
+    const ttlDays = Number.isFinite(REFRESH_TOKEN_TTL_DAYS) && REFRESH_TOKEN_TTL_DAYS > 0
+        ? REFRESH_TOKEN_TTL_DAYS
+        : 3650;
+    return new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
 };
 
 /**
- * Generate Refresh Token (7d)
+ * Generate Access Token
+ */
+const generateAccessToken = (user) => {
+    const payload = { id: user._id, username: user.username, role: user.role };
+    if (ACCESS_TOKEN_EXPIRES_IN.toLowerCase() === 'never') {
+        return jwt.sign(payload, process.env.JWT_SECRET);
+    }
+    return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN });
+};
+
+/**
+ * Generate Refresh Token
  */
 const generateRefreshToken = async (user, ipAddress) => {
     const token = crypto.randomBytes(40).toString('hex');
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const expiresAt = getRefreshTokenExpiry();
 
     const refreshToken = new Token({
         user_id: user._id,
@@ -42,7 +56,7 @@ const sendTokenResponse = async (user, ipAddress, res) => {
 
     const cookieOptions = {
         httpOnly: true,
-        expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        expires: getRefreshTokenExpiry(),
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'Strict'
     };
@@ -131,7 +145,7 @@ exports.refreshToken = async (req, res) => {
         const newRefreshToken = new Token({
             user_id: admin._id,
             token: newToken,
-            expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+            expires_at: getRefreshTokenExpiry(),
             created_by_ip: ipAddress
         });
         await newRefreshToken.save();
@@ -140,7 +154,7 @@ exports.refreshToken = async (req, res) => {
 
         const cookieOptions = {
             httpOnly: true,
-            expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+            expires: getRefreshTokenExpiry(),
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'Strict'
         };

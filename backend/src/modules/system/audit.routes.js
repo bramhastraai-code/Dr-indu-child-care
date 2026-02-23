@@ -1,13 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { getAuditLogs } = require('./system.controller');
-const auth = require('../../middleware/auth');
-const authorize = require('../../middleware/rbac');
 
-const jwtOnly = require('../../middleware/jwtOnly');
-
-router.use(auth, jwtOnly, authorize(['superadmin', 'admin']));
-
+// All routes are now public for external integrations like n8n
 router.get('/logs', getAuditLogs);
 
 module.exports = router;

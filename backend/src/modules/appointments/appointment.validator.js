@@ -4,30 +4,36 @@ const appointmentSchemas = {
     // POST /api/appointments
     create: Joi.object({
         patient_id: Joi.string().trim().required(),
-        doctor_type: Joi.string().valid('PULMONARY', 'NON_PULMONARY', 'VACCINATION', 'ANY').required(),
+        doctor_name: Joi.string().trim().min(2),
+        doctor_type: Joi.string().valid('PULMONARY', 'NON_PULMONARY', 'VACCINATION', 'ANY'),
+        doctor_id: Joi.string().trim(),
         visit_type: Joi.string().valid('VACCINATION', 'CONSULTATION', 'PULMONARY', 'FOLLOWUP').required(),
         appointment_date: Joi.date().iso().min('now').message('Appointment date must be in the future').required(),
         slot_id: Joi.string().trim().required(),
         appointment_mode: Joi.string().valid('ONLINE', 'OFFLINE').default('OFFLINE'),
         reason: Joi.string().trim().max(500).allow('', null),
         booking_source: Joi.string().valid('dashboard', 'whatsapp', 'form', 'api').default('dashboard')
-    }),
+    }).or('doctor_name', 'doctor_type', 'doctor_id'),
 
     // POST /api/appointments/whatsapp
     bookWhatsapp: Joi.object({
         wa_id: Joi.string().trim().required(),
-        doctor_type: Joi.string().valid('PULMONARY', 'NON_PULMONARY', 'VACCINATION').required(),
+        doctor_name: Joi.string().trim().min(2),
+        doctor_type: Joi.string().valid('PULMONARY', 'NON_PULMONARY', 'VACCINATION', 'ANY'),
+        doctor_id: Joi.string().trim(),
         visit_type: Joi.string().valid('VACCINATION', 'CONSULTATION', 'PULMONARY', 'FOLLOWUP').required(),
         appointment_date: Joi.date().iso().min('now').required(),
         slot_id: Joi.string().trim().required(),
         reason: Joi.string().trim().max(500).allow('', null)
-    }),
+    }).or('doctor_name', 'doctor_type', 'doctor_id'),
 
     // PATCH /api/appointments/:id
     update: Joi.object({
         appointment_date: Joi.date().iso().min('now'),
         slot_id: Joi.string().trim(),
+        doctor_name: Joi.string().trim().min(2),
         doctor_type: Joi.string().valid('PULMONARY', 'NON_PULMONARY', 'VACCINATION', 'ANY'),
+        doctor_id: Joi.string().trim(),
         visit_type: Joi.string().valid('VACCINATION', 'CONSULTATION', 'PULMONARY', 'FOLLOWUP'),
         appointment_mode: Joi.string().valid('ONLINE', 'OFFLINE'),
         reason: Joi.string().trim().max(500).allow('', null)

@@ -11,21 +11,18 @@ const {
     deleteSlot,
     updateDailySlot
 } = require('./slot.controller');
-const authorize = require('../../middleware/rbac');
-const auth = require('../../middleware/auth');
 
-router.use(auth);
-
+// All routes are public for external integrations like n8n
 router.get('/available', getAvailableSlots);
 router.get('/daily-status', getDailyStatus);
 router.post('/block', blockSlot);
 router.post('/unblock', unblockSlot);
 
-// Only admin/superadmin can modify slot config
+// Slot configurations
 router.get('/config', getSlotConfig);
-router.put('/config', authorize(['superadmin', 'admin']), updateSlotConfig);
-router.post('/config/add', authorize(['superadmin', 'admin']), createSlot);
-router.delete('/config/:slot_id', authorize(['superadmin', 'admin']), deleteSlot);
-router.post('/daily-update', authorize(['superadmin', 'admin']), updateDailySlot);
+router.put('/config', updateSlotConfig);
+router.post('/config/add', createSlot);
+router.delete('/config/:slot_id', deleteSlot);
+router.post('/daily-update', updateDailySlot);
 
 module.exports = router;

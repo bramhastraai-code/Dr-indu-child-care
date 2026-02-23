@@ -1,12 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { sendWhatsApp } = require('./whatsapp.controller');
-const auth = require('../../middleware/auth');
-const authorize = require('../../middleware/rbac');
 
-router.use(auth);
-
+// All routes are now public for external integrations like n8n
 // Outbound WhatsApp messaging
-router.post('/send', authorize(['bot_service', 'superadmin', 'admin']), sendWhatsApp);
+router.post('/send', sendWhatsApp);
 
 module.exports = router;

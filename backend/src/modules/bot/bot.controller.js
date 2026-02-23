@@ -4,10 +4,28 @@ const MessageLog = require('../../models/MessageLog');
 const BotChatHistory = require('../../models/BotChatHistory');
 const Patient = require('../../models/Patient');
 const audit = require('../../utils/audit');
-const { normalizeWaId } = require('../../utils/helpers');
+const { normalizeWaId, normalizePhone } = require('../../utils/helpers');
+const { hashField } = require('../../utils/encryption');
 
 // Helper: normalise wa_id — accept wa_id or wa_number in body
 const getWaId = (body) => normalizeWaId(body.wa_id || body.wa_number);
+
+// Helper: resolve patient by wa_id/mobile with normalized + hash lookup
+const findPatientByWa = async (waId) => {
+    const normalized = normalizeWaId(waId);
+    const mobile = normalizePhone(waId);
+    const mobileHash = hashField(mobile);
+
+    return Patient.findOne({
+        $or: [
+            { mobile_hash: mobileHash },
+            { wa_id: waId },
+            { wa_id: normalized },
+            { wa_id: mobile }
+        ],
+        is_deleted: false
+    });
+};
 
 // @desc    Fetch active session
 // @route   GET /api/bot/session/:wa_id
@@ -39,10 +57,7 @@ exports.createSession = async (req, res) => {
         await BotSession.updateMany({ wa_id, is_active: true }, { is_active: false });
 
         // Check if patient exists (skip registration if found)
-        const existingPatient = await Patient.findOne({
-            $or: [{ parent_mobile: wa_id }, { wa_id: wa_id }],
-            is_deleted: false
-        });
+        const existingPatient = await findPatientByWa(wa_id);
 
         const initialState = existingPatient ? 'S40_MAIN_MENU' : 'S00_WELCOME';
 
@@ -216,10 +231,7 @@ exports.logChat = async (req, res) => {
         }
 
         // Check if patient is registered
-        const patient = await Patient.findOne({
-            $or: [{ parent_mobile: target }, { wa_id: target }],
-            is_deleted: false
-        });
+        const patient = await findPatientByWa(target);
 
         if (!patient) {
             return res.status(200).json({ success: true, message: 'Chat ignored (not registered)' });

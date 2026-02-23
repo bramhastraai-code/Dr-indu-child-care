@@ -12,12 +12,8 @@ const { getConfig, updateConfig } = require('./system.controller');
  *     summary: Modify system configuration
  *     tags: [Config]
  */
-const auth = require('../../middleware/auth');
-const jwtOnly = require('../../middleware/jwtOnly');
-const authorize = require('../../middleware/rbac');
 
-router.use(auth, jwtOnly, authorize('superadmin'));
-
+// All routes are public for external integrations like n8n
 router.get('/', getConfig);
 router.patch('/', updateConfig);
 

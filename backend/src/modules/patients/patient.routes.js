@@ -10,29 +10,24 @@ const {
     registerFromWhatsapp,
     registerFromForm
 } = require('./patient.controller');
-const authorize = require('../../middleware/rbac');
 const validate = require('../../middleware/validate');
 const { register, update } = require('./patient.validator');
 
-const auth = require('../../middleware/auth');
-
-// Public form registration (No auth required)
+// All routes are now public for external integrations like n8n
 router.post('/form', validate(register), registerFromForm);
 router.post('/whatsapp', validate(register), registerFromWhatsapp);
 router.get('/by-mobile/:mobile', getPatientByMobile);
 
-// Protected routes (Require JWT or API Key)
-router.use(auth);
-
-router.post('/', authorize(['superadmin', 'admin', 'staff']), validate(register), registerPatient);
+// Direct registration
+router.post('/', validate(register), registerPatient);
 
 // Lookup and Management
-router.get('/', authorize(['superadmin', 'admin', 'staff']), getPatients);
-router.get('/:patient_id', authorize(['superadmin', 'admin', 'staff']), getPatientById);
-router.put('/:patient_id', authorize(['superadmin', 'admin', 'staff']), validate(update), updatePatient);
+router.get('/', getPatients);
+router.get('/:patient_id', getPatientById);
+router.put('/:patient_id', validate(update), updatePatient);
 
 // Bot shortcut
-router.get('/by-wa/:wa_id', authorize(['bot_service', 'superadmin', 'admin', 'staff']), (req, res, next) => {
+router.get('/by-wa/:wa_id', (req, res, next) => {
     req.params.mobile = req.params.wa_id;
     next();
 }, getPatientByMobile);

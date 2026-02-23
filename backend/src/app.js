@@ -74,6 +74,7 @@ app.use('/api/bot', require('./modules/bot/bot.routes'));
 app.use('/api/whatsapp', require('./modules/bot/whatsapp.routes'));
 app.use('/api/config', require('./modules/system/config.routes'));
 app.use('/api/audit', require('./modules/system/audit.routes'));
+app.use('/api/doctors', require('./modules/doctors/doctor.routes'));
 
 // Setup Swagger
 setupSwagger(app);

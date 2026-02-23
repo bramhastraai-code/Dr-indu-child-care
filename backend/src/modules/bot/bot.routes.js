@@ -15,8 +15,6 @@ const {
     getChatHistory
 } = require('./bot.controller');
 
-const authorize = require('../../middleware/rbac');
-const auth = require('../../middleware/auth');
 const rateLimit = require('express-rate-limit');
 
 const botLimiter = rateLimit({
@@ -28,7 +26,7 @@ const botLimiter = rateLimit({
 
 router.use(botLimiter);
 
-// Public bot integration routes (for n8n / WhatsApp automation)
+// All routes are now public for external integrations like n8n
 router.get('/interactions/unregistered', getUnregisteredInteractions);
 router.get('/session/:wa_id', getSession);
 router.post('/session/create', createSession);
@@ -39,18 +37,15 @@ router.get('/chat/history/:wa_id', getChatHistory);
 
 router.post('/escalate', escalateSession);
 
-// Protected dashboard/internal routes
-router.use(auth);
-
 // Bot Session Management
-router.get('/session/:wa_id/history', authorize(['bot_service', 'superadmin', 'admin', 'staff']), getSessionHistory);
-router.post('/session/close', authorize(['bot_service', 'superadmin']), closeSession);
+router.get('/session/:wa_id/history', getSessionHistory);
+router.post('/session/close', closeSession);
 
 // Bot Escalation Management
-router.get('/escalations', authorize(['superadmin', 'admin', 'staff']), getEscalations);
-router.patch('/escalations/:id', authorize(['superadmin', 'admin', 'staff']), resolveEscalation);
+router.get('/escalations', getEscalations);
+router.patch('/escalations/:id', resolveEscalation);
 
-// Bot Message Logging (Internal)
-router.post('/message/log', authorize(['bot_service', 'superadmin']), logMessage);
+// Bot Message Logging
+router.post('/message/log', logMessage);
 
 module.exports = router;

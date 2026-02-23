@@ -28,7 +28,9 @@ const enrichAppointment = async (a) => {
         ...a.toObject(),
         child_name: patient?.child_name || null,
         parent_name: patient?.parent_name || null,
-        parent_mobile: patient?.parent_mobile || null,
+        // Keep `parent_mobile` for backward compatibility in API responses.
+        parent_mobile: patient?.mobile || null,
+        mobile: patient?.mobile || null,
         slot_label: slot ? (slot.slot_label || slot.display_label) : null,
         start_time: slot?.start_time || null,
         end_time: slot?.end_time || null,
@@ -104,9 +106,16 @@ exports.createAppointment = async (req, res) => {
             patient = await Patient.findOne({ patient_id, is_deleted: false });
         } else if (mobile || wa_id) {
             const lookupValue = mobile || wa_id;
-            const mobileHash = hashField(normalizePhone(lookupValue));
+            const normalizedWaId = normalizeWaId(lookupValue);
+            const normalizedMobile = normalizePhone(lookupValue);
+            const mobileHash = hashField(normalizedMobile);
             patient = await Patient.findOne({
-                $or: [{ mobile_hash: mobileHash }, { wa_id: lookupValue }],
+                $or: [
+                    { mobile_hash: mobileHash },
+                    { wa_id: lookupValue },
+                    { wa_id: normalizedWaId },
+                    { wa_id: normalizedMobile }
+                ],
                 is_deleted: false
             });
         }
@@ -259,12 +268,19 @@ exports.getAppointmentStats = async (req, res) => {
 // Lookup upcoming appointments by mobile number (replaces /by-wa/:wa_id)
 exports.getAppointmentsByMobile = async (req, res) => {
     try {
-        const { mobile } = req.params;
+        const rawMobile = req.params.mobile;
+        const normalizedMobile = normalizePhone(rawMobile);
+        const mobileHash = hashField(normalizedMobile);
+
         const patient = await Patient.findOne({
-            $or: [{ parent_mobile: mobile }, { wa_id: mobile }],
+            $or: [
+                { mobile_hash: mobileHash },
+                { wa_id: rawMobile },
+                { wa_id: normalizedMobile }
+            ],
             is_deleted: false
         });
-        if (!patient) return res.status(404).json({ success: false, message: `No patient found for mobile ${mobile}` });
+        if (!patient) return res.status(404).json({ success: false, message: `No patient found for mobile ${rawMobile}` });
 
         const appointments = await Appointment.find({
             patient_id: patient.patient_id,
@@ -273,7 +289,13 @@ exports.getAppointmentsByMobile = async (req, res) => {
         }).sort({ appointment_date: 1 }).limit(5);
 
         const enriched = await Promise.all(appointments.map(enrichAppointment));
-        res.json({ success: true, patient_id: patient.patient_id, child_name: patient.child_name, data: enriched });
+        res.json({
+            success: true,
+            patient_id: patient.patient_id,
+            child_name: patient.child_name,
+            mobile: patient.mobile || normalizedMobile,
+            data: enriched
+        });
     } catch (err) {
         console.error('[getAppointmentsByMobile]', err.message);
         res.status(500).json({ success: false, error: err.message });
@@ -420,13 +442,15 @@ exports.getAppointmentsByWaId = async (req, res) => {
         const rawWaId = req.params.wa_id;
         const normalized = normalizeWaId(rawWaId);
         const mobile = extractMobile(rawWaId);
+        const mobileHash = hashField(normalizePhone(mobile));
 
         // Find patient by raw wa_id stored on Patient, or by extracted mobile
         const patient = await Patient.findOne({
             $or: [
                 { wa_id: normalized },
                 { wa_id: rawWaId },
-                { parent_mobile: mobile }
+                { wa_id: mobile },
+                { mobile_hash: mobileHash }
             ],
             is_deleted: false
         });
@@ -445,6 +469,7 @@ exports.getAppointmentsByWaId = async (req, res) => {
             success: true,
             patient_id: patient.patient_id,
             child_name: patient.child_name,
+            mobile: patient.mobile || mobile,
             data: enriched
         });
     } catch (err) {
@@ -480,13 +505,15 @@ exports.bookByWhatsapp = async (req, res) => {
         const normalized = normalizeWaId(rawWaId);
         // Step 2: Extract local mobile
         const mobile = extractMobile(rawWaId);
+        const mobileHash = hashField(normalizePhone(mobile));
 
         // Step 3: Check patient exists
         const patient = await Patient.findOne({
             $or: [
                 { wa_id: normalized },
                 { wa_id: rawWaId },
-                { parent_mobile: mobile }
+                { wa_id: mobile },
+                { mobile_hash: mobileHash }
             ],
             is_deleted: false
         });
@@ -567,6 +594,7 @@ exports.bookByWhatsapp = async (req, res) => {
                 appointment_id,
                 patient_id: patient.patient_id,
                 child_name: patient.child_name,
+                mobile: patient.mobile || mobile,
                 status: 'CONFIRMED',
                 booking_source: 'whatsapp',
                 wa_id: normalized,
@@ -605,9 +633,16 @@ exports.bookByForm = async (req, res) => {
             });
         }
 
+        const normalizedMobile = normalizePhone(mobile);
+        const mobileHash = hashField(normalizedMobile);
+
         // Lookup patient by mobile number
         const patient = await Patient.findOne({
-            $or: [{ parent_mobile: mobile }, { wa_id: mobile }],
+            $or: [
+                { mobile_hash: mobileHash },
+                { wa_id: mobile },
+                { wa_id: normalizedMobile }
+            ],
             is_deleted: false
         });
 
@@ -683,6 +718,7 @@ exports.bookByForm = async (req, res) => {
                 appointment_id,
                 patient_id: patient.patient_id,
                 child_name: patient.child_name,
+                mobile: patient.mobile || normalizedMobile,
                 status: 'CONFIRMED',
                 booking_source: 'form',
                 appointment_date: queryDate,

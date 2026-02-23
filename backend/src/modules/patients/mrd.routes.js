@@ -9,13 +9,9 @@ const { getMRDByPatientId, addMRDEntry, updateMRDEntry, exportMRD, getEntryByApp
  *     summary: Update an entry in MRD
  *     tags: [MRD]
  */
-const auth = require('../../middleware/auth');
-const jwtOnly = require('../../middleware/jwtOnly');
-const authorize = require('../../middleware/rbac');
 
-router.use(auth, jwtOnly);
-
-router.patch('/entry/:id', authorize(['superadmin', 'admin', 'staff']), updateMRDEntry);
+// All routes are now public for external integrations like n8n
+router.patch('/entry/:id', updateMRDEntry);
 
 /**
  * @openapi
@@ -24,7 +20,7 @@ router.patch('/entry/:id', authorize(['superadmin', 'admin', 'staff']), updateMR
  *     summary: Get MRD entry associated with a specific appointment
  *     tags: [MRD]
  */
-router.get('/appointment/:appointment_id', authorize(['superadmin', 'admin', 'staff']), getEntryByAppointment);
+router.get('/appointment/:appointment_id', getEntryByAppointment);
 
 /**
  * @openapi
@@ -33,8 +29,8 @@ router.get('/appointment/:appointment_id', authorize(['superadmin', 'admin', 'st
  *     summary: Export MRD data for a patient
  *     tags: [MRD]
  */
-router.get('/:patient_id/export', authorize(['superadmin', 'admin']), exportMRD);
-router.get('/:patient_id', authorize(['superadmin', 'admin', 'staff']), getMRDByPatientId);
-router.post('/entry', authorize(['superadmin', 'admin', 'staff']), addMRDEntry);
+router.get('/:patient_id/export', exportMRD);
+router.get('/:patient_id', getMRDByPatientId);
+router.post('/entry', addMRDEntry);
 
 module.exports = router;
