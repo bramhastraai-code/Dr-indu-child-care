@@ -19,7 +19,10 @@ dotenv.config();
 const app = express();
 
 // Security Headers
-app.use(helmet());
+app.use(helmet({
+    contentSecurityPolicy: false, // Disable CSP to allow Swagger UI to work across origins
+    crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 
 // Body parser
 app.use(express.json({ limit: '10kb' })); // Limit body size
