@@ -11,6 +11,7 @@ const corsMiddleware = require('./middleware/cors');
 const setupSwagger = require('./swagger');
 const auth = require('./middleware/auth');
 const authorize = require('./middleware/rbac');
+const jwtOnly = require('./middleware/jwtOnly');
 
 // Load env vars
 dotenv.config();
@@ -89,8 +90,8 @@ app.use('/api/slots', auth, require('./modules/system/slots.routes'));
 app.use('/api/mrd', auth, require('./modules/patients/mrd.routes'));
 app.use('/api/bot', auth, require('./modules/bot/bot.routes'));
 app.use('/api/whatsapp', auth, require('./modules/bot/whatsapp.routes'));
-app.use('/api/config', auth, authorize('superadmin'), require('./modules/system/config.routes'));
-app.use('/api/audit', auth, authorize(['superadmin', 'admin']), require('./modules/system/audit.routes'));
+app.use('/api/config', auth, jwtOnly, authorize('superadmin'), require('./modules/system/config.routes'));
+app.use('/api/audit', auth, jwtOnly, authorize(['superadmin', 'admin']), require('./modules/system/audit.routes'));
 
 // Setup Swagger
 setupSwagger(app);
