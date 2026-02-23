@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const BotChatHistorySchema = new mongoose.Schema({
-    wa_number: {
+    wa_id: {
         type: String,
         required: true,
         index: true
@@ -25,14 +25,14 @@ const BotChatHistorySchema = new mongoose.Schema({
 });
 
 // Compound index for efficient cleanup/limiting
-BotChatHistorySchema.index({ wa_number: 1, timestamp: -1 });
+BotChatHistorySchema.index({ wa_id: 1, timestamp: -1 });
 
 // Post-save hook to keep only last 10 messages for this number
 BotChatHistorySchema.post('save', async function (doc) {
     try {
-        const count = await doc.constructor.countDocuments({ wa_number: doc.wa_number });
+        const count = await doc.constructor.countDocuments({ wa_id: doc.wa_id });
         if (count > 10) {
-            const history = await doc.constructor.find({ wa_number: doc.wa_number })
+            const history = await doc.constructor.find({ wa_id: doc.wa_id })
                 .sort({ timestamp: -1 })
                 .skip(10);
 

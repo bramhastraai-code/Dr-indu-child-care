@@ -52,8 +52,8 @@ exports.getConfig = async (req, res) => {
 exports.updateConfig = async (req, res) => {
     try {
         const body = req.body;
-        const actor = req.admin ? req.admin.username : 'ADMIN';
-        const actor_type = req.admin ? req.admin.role : 'ADMIN';
+        const actor = req.user ? req.user.username : 'ADMIN';
+        const actor_type = req.user ? req.user.role : 'ADMIN';
 
         const keys = Object.keys(body);
         const updates = [];

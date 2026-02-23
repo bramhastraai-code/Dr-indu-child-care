@@ -79,7 +79,7 @@ exports.registerPatient = async (req, res) => {
 
         // Link patient_id to active bot session if applicable
         await BotSession.updateMany(
-            { $or: [{ wa_number: final_mobile }, { wa_id: final_mobile }], is_active: true },
+            { wa_id: final_mobile, is_active: true },
             { $set: { patient_id } }
         );
 

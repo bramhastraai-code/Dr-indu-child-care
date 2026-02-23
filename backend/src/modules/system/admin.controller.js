@@ -101,8 +101,8 @@ exports.createAdmin = async (req, res) => {
             event_type: 'ADMIN_USER_CREATED',
             entity_type: 'admin_user',
             entity_id: String(admin._id),
-            actor: req.admin ? req.admin.username : 'SYSTEM',
-            actor_type: req.admin ? req.admin.role : 'ADMIN',
+            actor: req.user ? req.user.username : 'SYSTEM',
+            actor_type: req.user ? req.user.role : 'ADMIN',
             new_value: { username, email, role, full_name }
         });
 
@@ -151,8 +151,8 @@ exports.updateAdmin = async (req, res) => {
             event_type: 'ADMIN_USER_UPDATED',
             entity_type: 'admin_user',
             entity_id: String(admin._id),
-            actor: req.admin ? req.admin.username : 'SYSTEM',
-            actor_type: req.admin ? req.admin.role : 'SUPER_ADMIN',
+            actor: req.user ? req.user.username : 'SYSTEM',
+            actor_type: req.user ? req.user.role : 'SUPER_ADMIN',
             old_value,
             new_value
         });

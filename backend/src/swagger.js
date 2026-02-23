@@ -40,7 +40,10 @@ const spec = {
 3. Expand any endpoint → **Try it out** → **Execute**.
         `,
     },
-    servers: [{ url: 'http://localhost:5000/', description: 'Local Development' }],
+    servers: [
+        { url: 'https://api-dr-indu-child-care.brahmaastra.ai/', description: 'Production Server' }
+        // { url: 'http://localhost:5000/', description: 'Local Development' }
+    ],
     components: {
         securitySchemes: {
             bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
@@ -69,7 +72,7 @@ const spec = {
         '/api/bot/session/create': {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Create a new bot session',
-                requestBody: body({ wa_number: '9876543210', session_id: 'wati_session_xyz987' }),
+                requestBody: body({ wa_id: '9876543210', session_id: 'wati_session_xyz987' }),
                 responses: { 210: { description: 'Session created' } }
             }
         },
@@ -77,7 +80,7 @@ const spec = {
             patch: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Update bot session state/data',
                 requestBody: body({
-                    wa_number: '9876543210',
+                    wa_id: '9876543210',
                     current_state: 'S01_COLLECT_GENDER',
                     session_data: { child_name: 'Arjun' }
                 }, false),
@@ -88,7 +91,7 @@ const spec = {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Escalate to human support',
                 requestBody: body({
-                    wa_number: '9876543210',
+                    wa_id: '9876543210',
                     reason: 'MAX_RETRIES',
                     failed_state: 'S04_MOBILE'
                 }),
@@ -105,7 +108,7 @@ const spec = {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Log chat message (for registered patients)',
                 requestBody: body({
-                    wa_number: '9876543210',
+                    wa_id: '9876543210',
                     user_name: 'Rohit Sharma',
                     message: 'I want to book an appointment'
                 }),
@@ -438,23 +441,46 @@ const spec = {
                     patient_id: 'DICC-2026-0001',
                     appointment_id: 'APT-2026-00001',
                     chief_complaint: 'Cough',
-                    diagnosis: 'Common Cold'
+                    diagnosis: 'Common Cold',
+                    recorded_by: 'admin_user'
                 }),
                 responses: { 200: { description: 'Added' } }
+            }
+        },
+        '/api/mrd/appointment/{appointment_id}': {
+            get: {
+                tags: ['MRD'], summary: 'Get MRD entry by appointment ID',
+                parameters: [pathParam('appointment_id', 'APT-2026-00001', 'appointment_id')],
+                responses: { 200: { description: 'Success' }, 404: { description: 'Not found' } }
             }
         },
 
         // ══ SYSTEM ════════════════════════════════════════════════════════════
         '/api/system/health': {
-            get: { tags: ['System'], summary: 'Health check', security: [] }
+            get: {
+                tags: ['System'], summary: 'Health check', security: [],
+                responses: { 200: { description: 'Server is up' } }
+            }
+        },
+        '/api/config': {
+            get: {
+                tags: ['System'], summary: 'Get clinic system configuration',
+                responses: { 200: { description: 'Success' } }
+            },
+            patch: {
+                tags: ['System'], summary: 'Update clinic system configuration',
+                requestBody: body({ clinic_name: 'Dr. Indu Child Care', notification_email: 'admin@dicc.com' }, false),
+                responses: { 200: { description: 'Updated' } }
+            }
         },
         '/api/audit/logs': {
             get: {
-                tags: ['System'], summary: 'Get audit logs',
+                tags: ['System'], summary: 'Get system audit logs',
                 parameters: [
                     queryParam('page', '1'),
                     queryParam('limit', '50')
-                ]
+                ],
+                responses: { 200: { description: 'List of audit events' } }
             }
         }
     }
@@ -470,5 +496,6 @@ module.exports = (app) => {
             filter: true,
         }
     }));
-    console.log('📚 Swagger docs  →  http://localhost:5000/api-docs');
+    // console.log('📚 Swagger docs (Local) → http://localhost:5000/api-docs');
+    console.log('📚 Swagger docs (Prod)  → https://api-dr-indu-child-care.brahmaastra.ai/api-docs');
 };

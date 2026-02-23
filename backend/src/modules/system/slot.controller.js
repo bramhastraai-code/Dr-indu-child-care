@@ -114,7 +114,7 @@ exports.blockSlot = async (req, res) => {
         }
 
         const queryDate = toMidnight(slot_date);
-        const actor = blocked_by || (req.admin ? req.admin.username : 'SECRETARY');
+        const actor = blocked_by || (req.user ? req.user.username : 'SECRETARY');
 
         const ops = slots.map(slot_id =>
             SlotAvailability.findOneAndUpdate(
@@ -137,7 +137,7 @@ exports.blockSlot = async (req, res) => {
             entity_type: 'time_slots',
             entity_id: `${doctor_type}_${slot_date}`,
             actor,
-            actor_type: req.admin ? req.admin.role : 'SECRETARY',
+            actor_type: req.user ? req.user.role : 'SECRETARY',
             new_value: { slots, reason }
         });
 
@@ -157,7 +157,7 @@ exports.unblockSlot = async (req, res) => {
         }
 
         const queryDate = toMidnight(slot_date);
-        const actor = req.admin ? req.admin.username : 'SECRETARY';
+        const actor = req.user ? req.user.username : 'SECRETARY';
 
         await SlotAvailability.updateMany(
             {
@@ -179,7 +179,7 @@ exports.unblockSlot = async (req, res) => {
             entity_type: 'time_slots',
             entity_id: `${doctor_type}_${slot_date}`,
             actor,
-            actor_type: req.admin ? req.admin.role : 'SECRETARY',
+            actor_type: req.user ? req.user.role : 'SECRETARY',
             new_value: { slots }
         });
 
@@ -203,7 +203,7 @@ exports.getSlotConfig = async (req, res) => {
 exports.updateSlotConfig = async (req, res) => {
     try {
         const { slots } = req.body;
-        const actor = req.admin ? req.admin.username : 'ADMIN';
+        const actor = req.user?.username || 'ADMIN';
 
         const ops = slots.map(s =>
             Slot.findOneAndUpdate(
@@ -220,7 +220,7 @@ exports.updateSlotConfig = async (req, res) => {
             entity_type: 'time_slots',
             entity_id: 'GLOBAL',
             actor,
-            actor_type: req.admin ? req.admin.role : 'ADMIN'
+            actor_type: req.user ? req.user.role : 'ADMIN'
         });
 
         res.json({ success: true, data });
@@ -239,7 +239,7 @@ exports.updateDailySlot = async (req, res) => {
         }
 
         const queryDate = toMidnight(slot_date);
-        const actor = req.admin ? req.admin.username : 'ADMIN';
+        const actor = req.user?.username || 'ADMIN';
 
         const updated = await SlotAvailability.findOneAndUpdate(
             { slot_id, slot_date: queryDate, doctor_type },
@@ -258,7 +258,7 @@ exports.updateDailySlot = async (req, res) => {
             entity_type: 'time_slots',
             entity_id: `${slot_id}_${slot_date}`,
             actor,
-            actor_type: req.admin ? req.admin.role : 'ADMIN',
+            actor_type: req.user ? req.user.role : 'ADMIN',
             new_value: { custom_label, custom_start_time, custom_end_time }
         });
 
@@ -286,7 +286,7 @@ exports.createSlot = async (req, res) => {
             start_time, end_time, session, is_active: true,
             sort_order: sort_order ?? 99
         });
-        const actor = req.admin?.username || 'ADMIN';
+        const actor = req.user?.username || 'ADMIN';
         await audit({ event_type: 'SLOT_CREATED', entity_type: 'time_slots', entity_id: slot_id, actor, new_value: slot });
         res.status(201).json({ success: true, data: slot });
     } catch (err) {
@@ -309,7 +309,7 @@ exports.deleteSlot = async (req, res) => {
         }
         await Slot.deleteOne({ slot_id });
         await SlotAvailability.deleteMany({ slot_id });
-        const actor = req.admin?.username || 'ADMIN';
+        const actor = req.user?.username || 'ADMIN';
         await audit({ event_type: 'SLOT_DELETED', entity_type: 'time_slots', entity_id: slot_id, actor });
         res.json({ success: true, message: 'Slot permanently deleted' });
     } catch (err) {

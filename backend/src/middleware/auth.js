@@ -41,6 +41,7 @@ module.exports = (req, res, next) => {
     // 2. Fallback to API Key Check (x-api-key) - for n8n/bot automation
     const apiKey = req.header('x-api-key') || req.header('X-API-KEY');
 
+
     if (apiKey && apiKey === process.env.N8N_API_KEY) {
         req.user = {
             id: 'n8n_system',

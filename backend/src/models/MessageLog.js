@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const MessageLogSchema = new mongoose.Schema({
-    to_number: {
+    wa_id: {
         type: String,
         required: true,
         index: true

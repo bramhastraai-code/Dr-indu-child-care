@@ -20,6 +20,21 @@ const validate = require('../../middleware/validate');
 const { create, bookWhatsapp, update } = require('./appointment.validator');
 const Joi = require('joi');
 const authorize = require('../../middleware/rbac');
+const auth = require('../../middleware/auth');
+const rateLimit = require('express-rate-limit');
+
+const whatsappLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 20,
+    keyGenerator: (req) => req.body.wa_id || req.ip,
+    message: { success: false, error_code: 'BOT_RATE_LIMIT', message: 'Rate limit exceeded for this WhatsApp ID' }
+});
+
+// 1. PUBLIC ROUTES (No Auth)
+router.post('/form', validate(create.keys({ mobile: Joi.string().regex(/^\d{10}$/).required(), patient_id: Joi.optional() })), bookByForm);
+
+// 2. PROTECTED ROUTES (Require JWT or API Key)
+router.use(auth);
 
 /**
  * @openapi
@@ -225,48 +240,8 @@ router.post('/', validate(create), createAppointment);
  *       409:
  *         description: Not registered / slot taken / already booked today
  */
-router.post('/whatsapp', authorize(['bot_service', 'superadmin']), validate(bookWhatsapp), bookByWhatsapp);
+router.post('/whatsapp', whatsappLimiter, authorize(['bot_service', 'superadmin']), validate(bookWhatsapp), bookByWhatsapp);
 
-/**
- * @openapi
- * /api/appointments/form:
- *   post:
- *     summary: Book via public web form (identified by mobile number)
- *     tags: [Appointments]
- *     description: Public endpoint, no auth. Patient MUST be pre-registered.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [mobile, appointment_date, slot_id, doctor_type]
- *             properties:
- *               mobile:
- *                 type: string
- *                 example: "9876543210"
- *               doctor_type:
- *                 type: string
- *                 enum: [PULMONARY, NON_PULMONARY, VACCINATION]
- *               visit_type:
- *                 type: string
- *                 enum: [CONSULTATION, VACCINATION, PULMONARY, FOLLOWUP]
- *               appointment_date:
- *                 type: string
- *                 format: date
- *                 example: "2026-06-15"
- *               slot_id:
- *                 type: string
- *                 example: "S1"
- *               reason:
- *                 type: string
- *     responses:
- *       201:
- *         description: Appointment confirmed
- *       409:
- *         description: Not registered / slot taken / already booked today
- */
-router.post('/form', validate(create.keys({ mobile: Joi.string().regex(/^\d{10}$/).required(), patient_id: Joi.optional() })), bookByForm);
 
 /**
  * @openapi

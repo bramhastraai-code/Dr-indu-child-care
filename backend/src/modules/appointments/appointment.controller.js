@@ -2,6 +2,7 @@ const Appointment = require('../../models/Appointment');
 const SlotAvailability = require('../../models/SlotAvailability');
 const Patient = require('../../models/Patient');
 const Slot = require('../../models/Slot');
+const MRD = require('../../models/MRD');
 const audit = require('../../utils/audit');
 const { toMidnight, extractMobile, normalizeWaId, normalizePhone } = require('../../utils/helpers');
 const { hashField } = require('../../utils/encryption');
@@ -18,9 +19,10 @@ const generateAppointmentId = async () => {
 };
 
 const enrichAppointment = async (a) => {
-    const [patient, slot] = await Promise.all([
+    const [patient, slot, mrdEntry] = await Promise.all([
         Patient.findOne({ patient_id: a.patient_id }),
-        Slot.findOne({ slot_id: a.slot_id })
+        Slot.findOne({ slot_id: a.slot_id }),
+        MRD.findOne({ 'entries.appointment_id': a.appointment_id })
     ]);
     return {
         ...a.toObject(),
@@ -30,7 +32,8 @@ const enrichAppointment = async (a) => {
         slot_label: slot ? (slot.slot_label || slot.display_label) : null,
         start_time: slot?.start_time || null,
         end_time: slot?.end_time || null,
-        session: slot?.session || null
+        session: slot?.session || null,
+        has_mrd_entry: !!mrdEntry
     };
 };
 
@@ -160,7 +163,7 @@ exports.createAppointment = async (req, res) => {
             confirmation_sent: true,
             created_at: new Date(),
             last_updated_at: new Date(),
-            last_updated_by: req.admin?.username || booking_source.toUpperCase()
+            last_updated_by: req.user?.username || booking_source.toUpperCase()
         });
 
         // 5. Mark slot as booked
@@ -176,7 +179,7 @@ exports.createAppointment = async (req, res) => {
             event_type: 'APPOINTMENT_BOOKED',
             entity_type: 'appointment',
             entity_id: appointment_id,
-            actor: req.admin?.username || booking_source.toUpperCase(),
+            actor: req.user?.username || booking_source.toUpperCase(),
             actor_type: booking_source === 'dashboard' ? 'ADMIN' : 'SYSTEM',
             new_value: { patient_id: patient.patient_id, date: appointment_date, slot_id, booking_source }
         });
@@ -300,7 +303,7 @@ exports.updateAppointment = async (req, res) => {
         if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
         if (appt.status === 'CANCELLED') return res.status(409).json({ success: false, message: 'Cannot update a cancelled appointment.' });
 
-        const updates = { last_updated_at: new Date(), last_updated_by: req.admin?.username || 'SYSTEM' };
+        const updates = { last_updated_at: new Date(), last_updated_by: req.user?.username || 'SYSTEM' };
 
         // Handle slot change (reschedule)
         if (appointment_date || slot_id) {
@@ -347,7 +350,7 @@ exports.updateAppointment = async (req, res) => {
 
         await audit({
             event_type: 'APPOINTMENT_UPDATED', entity_type: 'appointment', entity_id: appointment_id,
-            actor: req.admin?.username || 'SYSTEM', actor_type: req.admin ? req.admin.role : 'SYSTEM',
+            actor: req.user?.username || 'SYSTEM', actor_type: req.user ? req.user.role : 'SYSTEM',
             new_value: updates
         });
 
@@ -380,7 +383,7 @@ exports.cancelAppointment = async (req, res) => {
                 cancelled_by: canceller,
                 cancellation_reason: cancellation_reason || null,
                 last_updated_at: new Date(),
-                last_updated_by: req.admin?.username || canceller.toUpperCase()
+                last_updated_by: req.user?.username || canceller.toUpperCase()
             }
         });
 
@@ -392,7 +395,7 @@ exports.cancelAppointment = async (req, res) => {
 
         await audit({
             event_type: 'APPOINTMENT_CANCELLED', entity_type: 'appointment', entity_id: appointment_id,
-            actor: req.admin?.username || canceller.toUpperCase(),
+            actor: req.user?.username || canceller.toUpperCase(),
             actor_type: canceller === 'dashboard' ? 'ADMIN' : 'SYSTEM',
             new_value: { cancellation_reason, cancelled_by: canceller }
         });

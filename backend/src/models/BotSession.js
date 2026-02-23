@@ -6,7 +6,7 @@ const BotSessionSchema = new mongoose.Schema({
         required: true,
         unique: true
     },
-    wa_number: {
+    wa_id: {
         type: String,
         required: true,
         index: true

@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 // New models required by API spec
 const EscalationSchema = new mongoose.Schema({
-    wa_number: {
+    wa_id: {
         type: String,
         required: true,
         index: true

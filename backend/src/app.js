@@ -62,36 +62,15 @@ app.use('/api/system/health', (req, res) => res.json({ status: 'up' }));
 app.use('/api/admin', require('./modules/system/admin.routes'));
 app.use('/api/auth', require('./modules/auth/auth.routes'));
 
-// Public Forms (No Auth)
-const formLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000,
-    max: 10,
-    message: { success: false, error_code: 'RATE_LIMIT_EXCEEDED', message: 'Too many form submissions, try again in an hour' }
-});
-app.post('/api/patients/form', formLimiter, require('./modules/patients/patient.routes'));
-app.post('/api/appointments/form', formLimiter, require('./modules/appointments/appointment.routes'));
-
-// Protected Routes
-const whatsappLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000,
-    max: 20,
-    keyGenerator: (req) => {
-        // Use express-rate-limit's ipKeyGenerator for IPv6 compatibility
-        const ipKeyGenerator = require('express-rate-limit').ipKeyGenerator;
-        return req.body.wa_id || ipKeyGenerator(req);
-    },
-    message: { success: false, error_code: 'BOT_RATE_LIMIT', message: 'Rate limit exceeded for this WhatsApp ID' }
-});
-
-app.use('/api/patients', auth, require('./modules/patients/patient.routes'));
-app.use('/api/appointments/whatsapp', auth, whatsappLimiter, require('./modules/appointments/appointment.routes'));
-app.use('/api/appointments', auth, require('./modules/appointments/appointment.routes'));
-app.use('/api/slots', auth, require('./modules/system/slots.routes'));
-app.use('/api/mrd', auth, require('./modules/patients/mrd.routes'));
-app.use('/api/bot', auth, require('./modules/bot/bot.routes'));
-app.use('/api/whatsapp', auth, require('./modules/bot/whatsapp.routes'));
-app.use('/api/config', auth, jwtOnly, authorize('superadmin'), require('./modules/system/config.routes'));
-app.use('/api/audit', auth, jwtOnly, authorize(['superadmin', 'admin']), require('./modules/system/audit.routes'));
+// Mount all modules - security is handled within each router file
+app.use('/api/patients', require('./modules/patients/patient.routes'));
+app.use('/api/appointments', require('./modules/appointments/appointment.routes'));
+app.use('/api/slots', require('./modules/system/slots.routes'));
+app.use('/api/mrd', require('./modules/patients/mrd.routes'));
+app.use('/api/bot', require('./modules/bot/bot.routes'));
+app.use('/api/whatsapp', require('./modules/bot/whatsapp.routes'));
+app.use('/api/config', require('./modules/system/config.routes'));
+app.use('/api/audit', require('./modules/system/audit.routes'));
 
 // Setup Swagger
 setupSwagger(app);

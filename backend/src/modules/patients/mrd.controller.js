@@ -58,14 +58,35 @@ exports.addMRDEntry = async (req, res) => {
             return res.status(400).json({ success: false, message: 'patient_id and recorded_by are required' });
         }
 
+        // 1. Validate Appointment if provided
+        let appointment = null;
+        if (appointment_id) {
+            appointment = await Appointment.findOne({ appointment_id });
+            if (!appointment) {
+                return res.status(404).json({ success: false, message: 'Appointment not found' });
+            }
+            if (appointment.patient_id !== patient_id) {
+                return res.status(400).json({ success: false, message: 'Appointment does not belong to this patient' });
+            }
+
+            // 2. Check if entry already exists for this appointment
+            const existingEntry = await MRD.findOne({
+                patient_id,
+                'entries.appointment_id': appointment_id
+            });
+            if (existingEntry) {
+                return res.status(409).json({ success: false, message: 'MRD entry already exists for this appointment' });
+            }
+        }
+
         let mrd = await MRD.findOne({ patient_id });
         if (!mrd) mrd = await MRD.create({ patient_id, entries: [] });
 
         const newEntry = {
             appointment_id: appointment_id || null,
-            visit_date: visit_date ? new Date(visit_date) : new Date(),
-            visit_type: visit_type || 'CONSULTATION',
-            attending_doctor,
+            visit_date: visit_date ? new Date(visit_date) : (appointment ? appointment.appointment_date : new Date()),
+            visit_type: visit_type || (appointment ? appointment.visit_type : 'CONSULTATION'),
+            attending_doctor: attending_doctor || (appointment ? appointment.assigned_doctor_name : null),
             chief_complaint,
             clinical_notes,
             diagnosis,
@@ -93,10 +114,28 @@ exports.addMRDEntry = async (req, res) => {
             entity_type: 'mrd',
             entity_id: patient_id,
             actor: recorded_by,
-            actor_type: req.admin ? req.admin.role : 'DOCTOR'
+            actor_type: req.user ? req.user.role : 'DOCTOR'
         });
 
         res.json({ success: true, data: mrd });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Get MRD entry by appointment ID
+// @route   GET /api/mrd/appointment/:appointment_id
+exports.getEntryByAppointment = async (req, res) => {
+    try {
+        const { appointment_id } = req.params;
+        const mrd = await MRD.findOne({ 'entries.appointment_id': appointment_id });
+
+        if (!mrd) {
+            return res.status(404).json({ success: false, message: 'No MRD entry found for this appointment' });
+        }
+
+        const entry = mrd.entries.find(e => e.appointment_id === appointment_id);
+        res.json({ success: true, data: entry, patient_id: mrd.patient_id });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -113,7 +152,7 @@ exports.updateMRDEntry = async (req, res) => {
         const entry = mrd.entries.id(id);
         if (entry.is_locked) return res.status(403).json({ success: false, message: 'Entry is locked' });
 
-        const actor = req.admin ? req.admin.username : (req.body.recorded_by || 'DOCTOR');
+        const actor = req.user ? req.user.username : (req.body.recorded_by || 'DOCTOR');
 
         // Update fields if present
         const updateable = [
@@ -136,7 +175,7 @@ exports.updateMRDEntry = async (req, res) => {
             entity_type: 'mrd',
             entity_id: mrd.patient_id,
             actor,
-            actor_type: req.admin ? req.admin.role : 'DOCTOR'
+            actor_type: req.user ? req.user.role : 'DOCTOR'
         });
 
         res.json({ success: true, data: entry });

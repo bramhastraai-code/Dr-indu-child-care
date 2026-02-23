@@ -6,16 +6,16 @@ const Patient = require('../../models/Patient');
 const audit = require('../../utils/audit');
 const { normalizeWaId } = require('../../utils/helpers');
 
-// Helper: normalise wa_number — accept wa_id or wa_number in body
-const getWaNumber = (body) => normalizeWaId(body.wa_number || body.wa_id);
+// Helper: normalise wa_id — accept wa_id or wa_number in body
+const getWaId = (body) => normalizeWaId(body.wa_id || body.wa_number);
 
 // @desc    Fetch active session
 // @route   GET /api/bot/session/:wa_id
 exports.getSession = async (req, res) => {
     try {
-        const wa_number = normalizeWaId(req.params.wa_id);
+        const wa_id = normalizeWaId(req.params.wa_id);
         const session = await BotSession.findOne({
-            $or: [{ wa_number }, { wa_id: wa_number }],
+            wa_id,
             is_active: true,
             expires_at: { $gt: new Date() }
         }).sort({ created_at: -1 });
@@ -31,16 +31,16 @@ exports.getSession = async (req, res) => {
 // @route   POST /api/bot/session/create
 exports.createSession = async (req, res) => {
     try {
-        const wa_number = getWaNumber(req.body);
+        const wa_id = getWaId(req.body);
         const { session_id, source } = req.body;
-        if (!wa_number) return res.status(400).json({ success: false, message: 'wa_number is required' });
+        if (!wa_id) return res.status(400).json({ success: false, message: 'wa_id is required' });
 
         // Close others
-        await BotSession.updateMany({ $or: [{ wa_number }, { wa_id: wa_number }], is_active: true }, { is_active: false });
+        await BotSession.updateMany({ wa_id, is_active: true }, { is_active: false });
 
         // Check if patient exists (skip registration if found)
         const existingPatient = await Patient.findOne({
-            $or: [{ parent_mobile: wa_number }, { wa_id: wa_number }],
+            $or: [{ parent_mobile: wa_id }, { wa_id: wa_id }],
             is_deleted: false
         });
 
@@ -48,8 +48,7 @@ exports.createSession = async (req, res) => {
 
         const session = await BotSession.create({
             session_id: session_id || `SES-${Date.now()}`,
-            wa_number,
-            wa_id: wa_number,
+            wa_id,
             patient_id: existingPatient ? existingPatient.patient_id : null,
             current_state: initialState,
             session_data: {
@@ -69,12 +68,12 @@ exports.createSession = async (req, res) => {
 // @route   PATCH /api/bot/session/update
 exports.updateSession = async (req, res) => {
     try {
-        const wa_number = getWaNumber(req.body);
+        const wa_id = getWaId(req.body);
         const { current_state, session_data, retry_count, patient_id } = req.body;
-        if (!wa_number) return res.status(400).json({ success: false, message: 'wa_number is required' });
+        if (!wa_id) return res.status(400).json({ success: false, message: 'wa_id is required' });
 
         const session = await BotSession.findOneAndUpdate(
-            { $or: [{ wa_number }, { wa_id: wa_number }], is_active: true },
+            { wa_id, is_active: true },
             {
                 $set: {
                     current_state,
@@ -99,12 +98,12 @@ exports.updateSession = async (req, res) => {
 // @route   POST /api/bot/session/close
 exports.closeSession = async (req, res) => {
     try {
-        const wa_number = getWaNumber(req.body);
+        const wa_id = getWaId(req.body);
         const { reason } = req.body;
-        if (!wa_number) return res.status(400).json({ success: false, message: 'wa_number is required' });
+        if (!wa_id) return res.status(400).json({ success: false, message: 'wa_id is required' });
 
         const result = await BotSession.updateMany(
-            { $or: [{ wa_number }, { wa_id: wa_number }], is_active: true },
+            { wa_id, is_active: true },
             { is_active: false, expires_at: new Date(), current_state: reason || 'CLOSED' }
         );
 
@@ -118,16 +117,16 @@ exports.closeSession = async (req, res) => {
 // @route   POST /api/bot/escalate
 exports.escalateSession = async (req, res) => {
     try {
-        const wa_number = getWaNumber(req.body);
+        const wa_id = getWaId(req.body);
         const { reason, failed_state, retry_count, session_id } = req.body;
 
         const session = await BotSession.findOneAndUpdate(
-            { $or: [{ wa_number }, { wa_id: wa_number }], is_active: true },
+            { wa_id, is_active: true },
             { is_active: false, current_state: 'ERR_ESCALATED' }
         );
 
         const escalation = await Escalation.create({
-            wa_number,
+            wa_id,
             session_id: session_id || (session ? session.session_id : null),
             reason,
             failed_state,
@@ -137,7 +136,7 @@ exports.escalateSession = async (req, res) => {
         await audit({
             event_type: 'BOT_ESCALATION',
             entity_type: 'bot_session',
-            entity_id: session_id || (session ? session.session_id : wa_number),
+            entity_id: session_id || (session ? session.session_id : wa_id),
             actor: 'BOT',
             actor_type: 'BOT',
             new_value: { reason, failed_state }
@@ -153,9 +152,10 @@ exports.escalateSession = async (req, res) => {
 // @route   POST /api/bot/message/log
 exports.logMessage = async (req, res) => {
     try {
-        const { to_number, template_name, template_params, status, provider_response } = req.body;
+        const { to, wa_id, template_name, template_params, status, provider_response } = req.body;
+        const target = normalizeWaId(to || wa_id);
         const log = await MessageLog.create({
-            to_number,
+            wa_id: target,
             template_name,
             template_params,
             status,
@@ -182,7 +182,7 @@ exports.getEscalations = async (req, res) => {
 // @route   PATCH /api/bot/escalations/:id
 exports.resolveEscalation = async (req, res) => {
     try {
-        const actor = req.admin ? req.admin.username : 'SECRETARY';
+        const actor = req.user ? req.user.username : 'SECRETARY';
         const escalation = await Escalation.findByIdAndUpdate(
             req.params.id,
             { resolved: true, resolved_at: new Date(), resolved_by: actor },
@@ -196,7 +196,7 @@ exports.resolveEscalation = async (req, res) => {
             entity_type: 'bot_escalation',
             entity_id: req.params.id,
             actor,
-            actor_type: req.admin ? req.admin.role : 'SECRETARY'
+            actor_type: req.user ? req.user.role : 'SECRETARY'
         });
 
         res.json({ success: true, data: escalation });
@@ -209,14 +209,15 @@ exports.resolveEscalation = async (req, res) => {
 // @route   POST /api/bot/chat/log
 exports.logChat = async (req, res) => {
     try {
-        const { wa_number, user_name, message } = req.body;
-        if (!wa_number || !message) {
-            return res.status(400).json({ success: false, message: 'wa_number and message are required' });
+        const { wa_id, wa_number, user_name, message } = req.body;
+        const target = normalizeWaId(wa_id || wa_number);
+        if (!target || !message) {
+            return res.status(400).json({ success: false, message: 'wa_id and message are required' });
         }
 
         // Check if patient is registered
         const patient = await Patient.findOne({
-            $or: [{ parent_mobile: wa_number }, { wa_id: wa_number }],
+            $or: [{ parent_mobile: target }, { wa_id: target }],
             is_deleted: false
         });
 
@@ -225,7 +226,7 @@ exports.logChat = async (req, res) => {
         }
 
         await BotChatHistory.create({
-            wa_number,
+            wa_id: target,
             user_name: user_name || patient.parent_name || 'User',
             message,
             is_registered: true
@@ -241,8 +242,8 @@ exports.logChat = async (req, res) => {
 // @route   GET /api/bot/chat/history/:wa_id
 exports.getChatHistory = async (req, res) => {
     try {
-        const wa_number = normalizeWaId(req.params.wa_id);
-        const history = await BotChatHistory.find({ wa_number })
+        const wa_id = normalizeWaId(req.params.wa_id);
+        const history = await BotChatHistory.find({ wa_id })
             .sort({ timestamp: -1 })
             .limit(10);
 
@@ -274,8 +275,8 @@ exports.getUnregisteredInteractions = async (req, res) => {
 // @route   GET /api/bot/session/:wa_id/history
 exports.getSessionHistory = async (req, res) => {
     try {
-        const wa_number = normalizeWaId(req.params.wa_id);
-        const sessions = await BotSession.find({ $or: [{ wa_number }, { wa_id: wa_number }] }).sort({ created_at: -1 }).limit(10);
+        const wa_id = normalizeWaId(req.params.wa_id);
+        const sessions = await BotSession.find({ wa_id }).sort({ created_at: -1 }).limit(10);
         res.json({ success: true, data: sessions });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });

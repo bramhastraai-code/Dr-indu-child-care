@@ -14,10 +14,16 @@ const authorize = require('../../middleware/rbac');
 const validate = require('../../middleware/validate');
 const { register, update } = require('./patient.validator');
 
-// Registration routes
+const auth = require('../../middleware/auth');
+
+// Public form registration (No auth required)
+router.post('/form', validate(register), registerFromForm);
+
+// Protected routes (Require JWT or API Key)
+router.use(auth);
+
 router.post('/', authorize(['superadmin', 'admin', 'staff']), validate(register), registerPatient);
 router.post('/whatsapp', authorize(['bot_service', 'superadmin']), validate(register), registerFromWhatsapp);
-router.post('/form', validate(register), registerFromForm); // PUBLIC - handled in app.js as exception if needed
 
 // Lookup and Management
 router.get('/', authorize(['superadmin', 'admin', 'staff']), getPatients);

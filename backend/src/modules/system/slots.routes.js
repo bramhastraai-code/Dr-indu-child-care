@@ -12,6 +12,9 @@ const {
     updateDailySlot
 } = require('./slot.controller');
 const authorize = require('../../middleware/rbac');
+const auth = require('../../middleware/auth');
+
+router.use(auth);
 
 router.get('/available', getAvailableSlots);
 router.get('/daily-status', getDailyStatus);

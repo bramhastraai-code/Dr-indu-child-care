@@ -24,7 +24,7 @@ exports.sendWhatsApp = async (req, res) => {
 
         // Log the outbound message to DB
         const log = await MessageLog.create({
-            to_number: target,
+            wa_id: target,
             template_name: final_template,
             template_params: final_params || {},
             status: 'SENT', // Simulate immediate success for now

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getMRDByPatientId, addMRDEntry, updateMRDEntry, exportMRD } = require('./mrd.controller');
+const { getMRDByPatientId, addMRDEntry, updateMRDEntry, exportMRD, getEntryByAppointment } = require('./mrd.controller');
 
 /**
  * @openapi
@@ -9,7 +9,22 @@ const { getMRDByPatientId, addMRDEntry, updateMRDEntry, exportMRD } = require('.
  *     summary: Update an entry in MRD
  *     tags: [MRD]
  */
-router.patch('/entry/:id', updateMRDEntry);
+const auth = require('../../middleware/auth');
+const jwtOnly = require('../../middleware/jwtOnly');
+const authorize = require('../../middleware/rbac');
+
+router.use(auth, jwtOnly);
+
+router.patch('/entry/:id', authorize(['superadmin', 'admin', 'staff']), updateMRDEntry);
+
+/**
+ * @openapi
+ * /api/mrd/appointment/{appointment_id}:
+ *   get:
+ *     summary: Get MRD entry associated with a specific appointment
+ *     tags: [MRD]
+ */
+router.get('/appointment/:appointment_id', authorize(['superadmin', 'admin', 'staff']), getEntryByAppointment);
 
 /**
  * @openapi
@@ -18,52 +33,8 @@ router.patch('/entry/:id', updateMRDEntry);
  *     summary: Export MRD data for a patient
  *     tags: [MRD]
  */
-router.get('/:patient_id/export', exportMRD);
-const auth = require('../../middleware/auth');
-
-/**
- * @openapi
- * /api/mrd/{patient_id}:
- *   get:
- *     summary: Get MRD for a patient
- *     tags: [MRD]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: patient_id
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Patient MRD found
- */
-router.get('/:patient_id', auth, getMRDByPatientId);
-
-/**
- * @openapi
- * /api/mrd/entry:
- *   post:
- *     summary: Add an entry to MRD
- *     tags: [MRD]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               patient_id: { type: string }
- *               doctor: { type: string }
- *               visit_type: { type: string }
- *               clinical_notes: { type: string }
- *     responses:
- *       200:
- *         description: MRD entry added
- */
-router.post('/entry', auth, addMRDEntry);
+router.get('/:patient_id/export', authorize(['superadmin', 'admin']), exportMRD);
+router.get('/:patient_id', authorize(['superadmin', 'admin', 'staff']), getMRDByPatientId);
+router.post('/entry', authorize(['superadmin', 'admin', 'staff']), addMRDEntry);
 
 module.exports = router;

@@ -4,6 +4,10 @@ const { getAuditLogs } = require('./system.controller');
 const auth = require('../../middleware/auth');
 const authorize = require('../../middleware/rbac');
 
-router.get('/logs', auth, authorize(['superadmin', 'admin']), getAuditLogs);
+const jwtOnly = require('../../middleware/jwtOnly');
+
+router.use(auth, jwtOnly, authorize(['superadmin', 'admin']));
+
+router.get('/logs', getAuditLogs);
 
 module.exports = router;
