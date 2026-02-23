@@ -40,13 +40,14 @@ const spec = {
 3. Expand any endpoint → **Try it out** → **Execute**.
         `,
     },
-    servers: [{ url: 'https://api-dr-indu-child-care.brahmaastra.ai/', description: 'Cloud Production' }],
+    servers: [{ url: 'http://localhost:5000/', description: 'Local Development' }],
     components: {
         securitySchemes: {
-            bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }
+            bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+            apiKeyAuth: { type: 'apiKey', name: 'x-api-key', in: 'header' }
         }
     },
-    security: [{ bearerAuth: [] }],
+    security: [{ bearerAuth: [] }, { apiKeyAuth: [] }],
     tags: [
         { name: 'Admin', description: 'Admin user management' },
         { name: 'Patients', description: 'Patient registration and lookup' },
@@ -469,5 +470,5 @@ module.exports = (app) => {
             filter: true,
         }
     }));
-    console.log('📚 Swagger docs  →  https://api-dr-indu-child-care.brahmaastra.ai/api-docs');
+    console.log('📚 Swagger docs  →  http://localhost:5000/api-docs');
 };
