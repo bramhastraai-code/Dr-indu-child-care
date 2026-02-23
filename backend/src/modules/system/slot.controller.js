@@ -6,7 +6,7 @@ const { toMidnight } = require('../../utils/helpers');
 // @route   GET /api/slots/available
 exports.getAvailableSlots = async (req, res) => {
     try {
-        const { doctor_type, date } = req.query;
+        const { doctor_type, date, doctor_id } = req.query;
 
         if (!doctor_type || !date) {
             return res.status(400).json({ success: false, message: 'doctor_type and date are required' });
@@ -15,22 +15,42 @@ exports.getAvailableSlots = async (req, res) => {
         const queryDate = toMidnight(date);
         const dayOfWeek = queryDate.getDay(); // 0=Sun … 6=Sat
 
-        // 1. Get all active slot templates that are enabled for this doctor+day
-        const templates = await Slot.find({ is_active: true }).sort({ start_time: 1 });
-        const todayTemplates = templates.filter(t => {
-            // Use per-doctor-type schedule if defined, else fall back to global days_of_week
-            const perDoctor = t.days_by_doctor?.get(doctor_type);
-            const activeDays = (perDoctor && perDoctor.length > 0) ? perDoctor
-                : (t.days_of_week?.length > 0 ? t.days_of_week : [0, 1, 2, 3, 4, 5, 6]);
-            return activeDays.includes(dayOfWeek);
-        });
+        let todayTemplates = [];
+        const allTemplates = await Slot.find({ is_active: true }).sort({ start_time: 1 });
 
-        // 2. Get ALL booked/blocked slots on this date (across all doctor types)
-        const unavailable = await SlotAvailability.find({
-            slot_date: queryDate,
-            $or: [{ is_booked: true }, { blocked_by_admin: true }]
-        });
+        if (doctor_id) {
+            const Doctor = require('../../models/Doctor');
+            const doctor = await Doctor.findOne({ doctor_id });
+            if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
+            const doctorSlotIds = doctor.available_slots?.get(dayOfWeek.toString()) || [];
+            if (doctorSlotIds.length === 0) {
+                // If no specific slots for doctor on this day, fallback to doctor_type templates
+                todayTemplates = allTemplates.filter(t => {
+                    const perDoctor = t.days_by_doctor?.get(doctor_type);
+                    const activeDays = (perDoctor && perDoctor.length > 0) ? perDoctor : (t.days_of_week || [0, 1, 2, 3, 4, 5, 6]);
+                    return activeDays.includes(dayOfWeek);
+                });
+            } else {
+                todayTemplates = allTemplates.filter(t => doctorSlotIds.includes(t.slot_id));
+            }
+        } else {
+            todayTemplates = allTemplates.filter(t => {
+                const perDoctor = t.days_by_doctor?.get(doctor_type);
+                const activeDays = (perDoctor && perDoctor.length > 0) ? perDoctor : (t.days_of_week || [0, 1, 2, 3, 4, 5, 6]);
+                return activeDays.includes(dayOfWeek);
+            });
+        }
+
+        // 2. Get booked/blocked slots on this date
+        const filter = { slot_date: queryDate, $or: [{ is_booked: true }, { blocked_by_admin: true }] };
+        if (doctor_id) {
+            filter.doctor_id = doctor_id;
+        } else {
+            filter.doctor_type = doctor_type;
+        }
+
+        const unavailable = await SlotAvailability.find(filter);
         const bookedSlotIds = new Set(unavailable.map(a => a.slot_id));
 
         const available_slots = todayTemplates
@@ -47,6 +67,7 @@ exports.getAvailableSlots = async (req, res) => {
             success: true,
             date,
             doctor_type,
+            doctor_id: doctor_id || null,
             day_of_week: dayOfWeek,
             is_clinic_open: true,
             data: available_slots,
@@ -61,14 +82,22 @@ exports.getAvailableSlots = async (req, res) => {
 // @route   GET /api/slots/daily-status
 exports.getDailyStatus = async (req, res) => {
     try {
-        const { doctor_type, date } = req.query;
+        const { doctor_type, date, doctor_id } = req.query;
         if (!doctor_type || !date) {
             return res.status(400).json({ success: false, message: 'doctor_type and date are required' });
         }
 
         const queryDate = toMidnight(date);
         const templates = await Slot.find().sort({ sort_order: 1 });
-        const availability = await SlotAvailability.find({ slot_date: queryDate });
+
+        const filter = { slot_date: queryDate };
+        if (doctor_id) {
+            filter.doctor_id = doctor_id;
+        } else {
+            filter.doctor_type = doctor_type;
+        }
+
+        const availability = await SlotAvailability.find(filter);
 
         const statusMap = {};
         availability.forEach(a => {
@@ -98,7 +127,7 @@ exports.getDailyStatus = async (req, res) => {
             };
         });
 
-        res.json({ success: true, date, doctor_type, data });
+        res.json({ success: true, date, doctor_type, doctor_id: doctor_id || null, data });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -107,7 +136,7 @@ exports.getDailyStatus = async (req, res) => {
 // @route   POST /api/slots/block
 exports.blockSlot = async (req, res) => {
     try {
-        const { slots, slot_date, doctor_type, reason, blocked_by } = req.body;
+        const { slots, slot_date, doctor_type, doctor_id, reason, blocked_by } = req.body;
 
         if (!slots || !Array.isArray(slots) || !slot_date || !doctor_type) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -118,7 +147,7 @@ exports.blockSlot = async (req, res) => {
 
         const ops = slots.map(slot_id =>
             SlotAvailability.findOneAndUpdate(
-                { slot_id, slot_date: queryDate, doctor_type },
+                { slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null },
                 {
                     is_booked: false,
                     blocked_by_admin: true,
@@ -150,7 +179,7 @@ exports.blockSlot = async (req, res) => {
 // @route   POST /api/slots/unblock
 exports.unblockSlot = async (req, res) => {
     try {
-        const { slots, slot_date, doctor_type } = req.body;
+        const { slots, slot_date, doctor_type, doctor_id } = req.body;
 
         if (!slots || !Array.isArray(slots) || !slot_date || !doctor_type) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -164,6 +193,7 @@ exports.unblockSlot = async (req, res) => {
                 slot_id: { $in: slots },
                 slot_date: queryDate,
                 doctor_type,
+                doctor_id: doctor_id || null,
                 is_booked: false // Safety: don't unblock if actually booked
             },
             {
@@ -232,7 +262,7 @@ exports.updateSlotConfig = async (req, res) => {
 // @route   POST /api/slots/daily-update
 exports.updateDailySlot = async (req, res) => {
     try {
-        const { slot_id, slot_date, doctor_type, custom_label, custom_start_time, custom_end_time } = req.body;
+        const { slot_id, slot_date, doctor_type, doctor_id, custom_label, custom_start_time, custom_end_time } = req.body;
 
         if (!slot_id || !slot_date || !doctor_type) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -242,7 +272,7 @@ exports.updateDailySlot = async (req, res) => {
         const actor = req.user?.username || 'ADMIN';
 
         const updated = await SlotAvailability.findOneAndUpdate(
-            { slot_id, slot_date: queryDate, doctor_type },
+            { slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null },
             {
                 custom_label,
                 custom_start_time,

@@ -3,6 +3,8 @@ const SlotAvailability = require('../../models/SlotAvailability');
 const Patient = require('../../models/Patient');
 const Slot = require('../../models/Slot');
 const MRD = require('../../models/MRD');
+const Doctor = require('../../models/Doctor');
+
 const audit = require('../../utils/audit');
 const { toMidnight, extractMobile, normalizeWaId, normalizePhone } = require('../../utils/helpers');
 const { hashField } = require('../../utils/encryption');
@@ -43,14 +45,16 @@ const enrichAppointment = async (a) => {
 // List appointments with filters: date, patient_id, status, source, page, limit
 exports.getAppointments = async (req, res) => {
     try {
-        const { date, patient_id, status, source, page = 1, limit = 50 } = req.query;
-        const filter = {};
+        const { date, patient_id, doctor_id, doctor_type, status, source, page = 1, limit = 50 } = req.query;
+        const filter = { is_deleted: false };
 
         if (date) {
             const d = toMidnight(date);
             filter.appointment_date = d;
         }
         if (patient_id) filter.patient_id = patient_id;
+        if (doctor_id) filter.doctor_id = doctor_id;
+        if (doctor_type) filter.doctor_type = doctor_type.toUpperCase();
         if (status) filter.status = status.toUpperCase();
         if (source) filter.booking_source = source.toLowerCase();
 
@@ -80,13 +84,19 @@ exports.createAppointment = async (req, res) => {
     try {
         const {
             patient_id,
-            mobile, wa_id,         // for whatsapp source
+            mobile, wa_id,
             doctor_type,
-            visit_type,
-            appointment_mode,
+            doctor_id,
             appointment_date,
             slot_id,
+            visit_type,
             reason,
+            child_name,
+            parent_name,
+            email,
+            dob,
+            gender,
+            appointment_mode,
             booking_source = 'dashboard'
         } = req.body;
 
@@ -129,14 +139,16 @@ exports.createAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid appointment_date. Use YYYY-MM-DD.' });
         }
 
-        // 1. Slot conflict — physical slots are shared across all doctor types
+        // 1. Slot conflict — physical slots can be shared if doctor_id is specified
         const slotTaken = await SlotAvailability.findOne({
             slot_id,
             slot_date: queryDate,
+            doctor_type,
+            doctor_id: doctor_id || null, // Check conflict for specific doctor or general slot
             $or: [{ is_booked: true }, { blocked_by_admin: true }]
         });
         if (slotTaken) {
-            return res.status(409).json({ success: false, message: 'This time slot is already booked or blocked. Please choose another.' });
+            return res.status(409).json({ success: false, message: 'This time slot is already booked or blocked for this doctor. Please choose another.' });
         }
 
         // 2. One appointment per patient per day
@@ -157,12 +169,22 @@ exports.createAppointment = async (req, res) => {
 
         // 4. Create appointment
         const appointment_id = await generateAppointmentId();
+
+        // Auto-fill doctor name if doctor_id is provided
+        let assignedDoctorName = null;
+        if (doctor_id) {
+            const doc = await Doctor.findOne({ doctor_id });
+            if (doc) assignedDoctorName = doc.name;
+        }
+
         await Appointment.create({
             appointment_id,
             patient_id: patient.patient_id,
             visit_type: visit_type || 'CONSULTATION',
             appointment_mode: appointment_mode || 'OFFLINE',
             doctor_type,
+            doctor_id: doctor_id || null,
+            doctor_name: assignedDoctorName,
             appointment_date: queryDate,
             slot_id,
             appointment_time: slot?.start_time || null,
@@ -176,11 +198,11 @@ exports.createAppointment = async (req, res) => {
         });
 
         // 5. Mark slot as booked
-        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate });
+        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null });
         if (avail) {
-            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_type } });
+            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_type, doctor_id: doctor_id || null } });
         } else {
-            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_type, is_booked: true, blocked_by_admin: false, appointment_id });
+            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null, is_booked: true, blocked_by_admin: false, appointment_id });
         }
 
         // 6. Audit
@@ -190,7 +212,7 @@ exports.createAppointment = async (req, res) => {
             entity_id: appointment_id,
             actor: req.user?.username || booking_source.toUpperCase(),
             actor_type: booking_source === 'dashboard' ? 'ADMIN' : 'SYSTEM',
-            new_value: { patient_id: patient.patient_id, date: appointment_date, slot_id, booking_source }
+            new_value: { patient_id: patient.patient_id, date: appointment_date, slot_id, booking_source, doctor_id }
         });
 
         res.status(201).json({
@@ -204,6 +226,8 @@ exports.createAppointment = async (req, res) => {
                 appointment_date: queryDate,
                 appointment_time: slot?.start_time || null,
                 doctor_type,
+                doctor_id: doctor_id || null,
+                doctor_name: assignedDoctorName,
                 visit_type: visit_type || 'CONSULTATION',
                 appointment_mode: appointment_mode || 'OFFLINE',
                 slot: slot ? { slot_id, label: slot.slot_label || slot.display_label } : { slot_id }
@@ -487,6 +511,7 @@ exports.bookByWhatsapp = async (req, res) => {
         const {
             wa_id: rawWaId,
             doctor_type,
+            doctor_id,
             visit_type,
             appointment_mode,
             appointment_date,
@@ -534,10 +559,12 @@ exports.bookByWhatsapp = async (req, res) => {
 
         const slotTaken = await SlotAvailability.findOne({
             slot_id, slot_date: queryDate,
+            doctor_type,
+            doctor_id: doctor_id || null,
             $or: [{ is_booked: true }, { blocked_by_admin: true }]
         });
         if (slotTaken) {
-            return res.status(409).json({ success: false, message: 'This time slot is already booked or blocked. Please choose another.' });
+            return res.status(409).json({ success: false, message: 'This time slot is already booked or blocked for this doctor. Please choose another.' });
         }
 
         const existing = await Appointment.findOne({
@@ -555,12 +582,21 @@ exports.bookByWhatsapp = async (req, res) => {
         const slot = await Slot.findOne({ slot_id });
         const appointment_id = await generateAppointmentId();
 
+        // Auto-fill doctor name if doctor_id is provided
+        let assignedDoctorName = null;
+        if (doctor_id) {
+            const doc = await Doctor.findOne({ doctor_id });
+            if (doc) assignedDoctorName = doc.name;
+        }
+
         await Appointment.create({
             appointment_id,
             patient_id: patient.patient_id,
             visit_type: visit_type || 'CONSULTATION',
             appointment_mode: appointment_mode || 'OFFLINE',
             doctor_type,
+            doctor_id: doctor_id || null,
+            doctor_name: assignedDoctorName,
             appointment_date: queryDate,
             slot_id,
             appointment_time: slot?.start_time || null,
@@ -575,17 +611,17 @@ exports.bookByWhatsapp = async (req, res) => {
         });
 
         // Mark slot booked
-        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate });
+        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null });
         if (avail) {
-            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_type } });
+            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_type, doctor_id: doctor_id || null } });
         } else {
-            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_type, is_booked: true, blocked_by_admin: false, appointment_id });
+            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null, is_booked: true, blocked_by_admin: false, appointment_id });
         }
 
         await audit({
             event_type: 'APPOINTMENT_BOOKED', entity_type: 'appointment', entity_id: appointment_id,
             actor: normalized, actor_type: 'SYSTEM',
-            new_value: { patient_id: patient.patient_id, date: appointment_date, slot_id, booking_source: 'whatsapp', wa_id: normalized }
+            new_value: { patient_id: patient.patient_id, date: appointment_date, slot_id, booking_source: 'whatsapp', wa_id: normalized, doctor_id }
         });
 
         res.status(201).json({
@@ -660,10 +696,12 @@ exports.bookByForm = async (req, res) => {
 
         const slotTaken = await SlotAvailability.findOne({
             slot_id, slot_date: queryDate,
+            doctor_type,
+            doctor_id: doctor_id || null,
             $or: [{ is_booked: true }, { blocked_by_admin: true }]
         });
         if (slotTaken) {
-            return res.status(409).json({ success: false, message: 'This time slot is already booked or blocked. Please choose another.' });
+            return res.status(409).json({ success: false, message: 'This time slot is already booked or blocked for this doctor. Please choose another.' });
         }
 
         const existing = await Appointment.findOne({
@@ -681,12 +719,21 @@ exports.bookByForm = async (req, res) => {
         const slot = await Slot.findOne({ slot_id });
         const appointment_id = await generateAppointmentId();
 
+        // Auto-fill doctor name if doctor_id is provided
+        let assignedDoctorName = null;
+        if (doctor_id) {
+            const doc = await Doctor.findOne({ doctor_id });
+            if (doc) assignedDoctorName = doc.name;
+        }
+
         await Appointment.create({
             appointment_id,
             patient_id: patient.patient_id,
             visit_type: visit_type || 'CONSULTATION',
             appointment_mode: appointment_mode || 'OFFLINE',
             doctor_type,
+            doctor_id: doctor_id || null,
+            doctor_name: assignedDoctorName,
             appointment_date: queryDate,
             slot_id,
             appointment_time: slot?.start_time || null,
@@ -699,17 +746,17 @@ exports.bookByForm = async (req, res) => {
             last_updated_by: 'FORM'
         });
 
-        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate });
+        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null });
         if (avail) {
-            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_type } });
+            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_type, doctor_id: doctor_id || null } });
         } else {
-            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_type, is_booked: true, blocked_by_admin: false, appointment_id });
+            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null, is_booked: true, blocked_by_admin: false, appointment_id });
         }
 
         await audit({
             event_type: 'APPOINTMENT_BOOKED', entity_type: 'appointment', entity_id: appointment_id,
             actor: mobile, actor_type: 'SYSTEM',
-            new_value: { patient_id: patient.patient_id, date: appointment_date, slot_id, booking_source: 'form' }
+            new_value: { patient_id: patient.patient_id, date: appointment_date, slot_id, booking_source: 'form', doctor_id }
         });
 
         res.status(201).json({
