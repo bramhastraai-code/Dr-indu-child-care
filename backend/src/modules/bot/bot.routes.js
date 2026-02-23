@@ -26,22 +26,27 @@ const botLimiter = rateLimit({
     message: { success: false, error_code: 'BOT_RATE_LIMIT', message: 'Rate limit exceeded for this WhatsApp ID' }
 });
 
-router.use(auth, botLimiter);
+router.use(botLimiter);
+
+// Public bot integration routes (for n8n / WhatsApp automation)
+router.get('/interactions/unregistered', getUnregisteredInteractions);
+router.get('/session/:wa_id', getSession);
+router.post('/session/create', createSession);
+router.patch('/session/update', updateSession);
+
+router.post('/chat/log', logChat);
+router.get('/chat/history/:wa_id', getChatHistory);
+
+router.post('/escalate', escalateSession);
+
+// Protected dashboard/internal routes
+router.use(auth);
 
 // Bot Session Management
-router.get('/interactions/unregistered', authorize(['superadmin', 'admin', 'staff']), getUnregisteredInteractions);
-router.get('/session/:wa_id', authorize(['bot_service', 'superadmin', 'admin', 'staff']), getSession);
 router.get('/session/:wa_id/history', authorize(['bot_service', 'superadmin', 'admin', 'staff']), getSessionHistory);
-router.post('/session/create', authorize(['bot_service', 'superadmin']), createSession);
-router.patch('/session/update', authorize(['bot_service', 'superadmin']), updateSession);
 router.post('/session/close', authorize(['bot_service', 'superadmin']), closeSession);
 
-// Bot Chat History
-router.post('/chat/log', authorize(['bot_service', 'superadmin']), logChat);
-router.get('/chat/history/:wa_id', authorize(['bot_service', 'superadmin', 'admin', 'staff']), getChatHistory);
-
 // Bot Escalation Management
-router.post('/escalate', authorize(['bot_service', 'superadmin']), escalateSession);
 router.get('/escalations', authorize(['superadmin', 'admin', 'staff']), getEscalations);
 router.patch('/escalations/:id', authorize(['superadmin', 'admin', 'staff']), resolveEscalation);
 

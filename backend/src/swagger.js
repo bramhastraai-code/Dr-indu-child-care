@@ -65,6 +65,7 @@ const spec = {
         '/api/bot/session/{wa_id}': {
             get: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Get active bot session',
+                security: [],
                 parameters: [pathParam('wa_id', '9876543210', 'WhatsApp number')],
                 responses: { 200: { description: 'Success' }, 404: { description: 'No active session' } }
             }
@@ -72,6 +73,7 @@ const spec = {
         '/api/bot/session/create': {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Create a new bot session',
+                security: [],
                 requestBody: body({ wa_id: '9876543210', session_id: 'wati_session_xyz987' }),
                 responses: { 210: { description: 'Session created' } }
             }
@@ -79,6 +81,7 @@ const spec = {
         '/api/bot/session/update': {
             patch: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Update bot session state/data',
+                security: [],
                 requestBody: body({
                     wa_id: '9876543210',
                     current_state: 'S01_COLLECT_GENDER',
@@ -90,6 +93,7 @@ const spec = {
         '/api/bot/escalate': {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Escalate to human support',
+                security: [],
                 requestBody: body({
                     wa_id: '9876543210',
                     reason: 'MAX_RETRIES',
@@ -101,12 +105,14 @@ const spec = {
         '/api/bot/interactions/unregistered': {
             get: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Get unregistered bot interactions (leads)',
+                security: [],
                 responses: { 200: { description: 'List of anonymous bot sessions' } }
             }
         },
         '/api/bot/chat/log': {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Log chat message (for registered patients)',
+                security: [],
                 requestBody: body({
                     wa_id: '9876543210',
                     user_name: 'Rohit Sharma',
@@ -118,6 +124,7 @@ const spec = {
         '/api/bot/chat/history/{wa_id}': {
             get: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Get last 10 chat messages',
+                security: [],
                 parameters: [pathParam('wa_id', '9876543210')],
                 responses: { 200: { description: 'Chat history' } }
             }
@@ -125,12 +132,14 @@ const spec = {
         '/api/appointments/reminders/pending-24h': {
             get: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Get appointments for tomorrow (for 24h reminders)',
+                security: [],
                 responses: { 200: { description: 'List of pending reminders' } }
             }
         },
         '/api/appointments/reminders/{appointment_id}/mark-sent': {
             patch: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Mark reminder as sent (updates timestamp)',
+                security: [],
                 parameters: [pathParam('appointment_id', 'APT-2026-00001')],
                 requestBody: body({ type: '24h' }),
                 responses: { 200: { description: 'Updated. Response includes the exact timestamp of the reminder.' } }
@@ -201,6 +210,7 @@ const spec = {
         '/api/patients/whatsapp': {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Register patient via WhatsApp Bot',
+                security: [],
                 description: 'Registers a new patient. Note: email, address, and symptoms_notes are optional.',
                 requestBody: body({
                     child_name: 'Arjun Sharma',
@@ -235,6 +245,7 @@ const spec = {
         '/api/patients/by-mobile/{mobile}': {
             get: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Lookup patient by mobile number',
+                security: [],
                 parameters: [pathParam('mobile', '9876500001', 'Primary mobile or WA ID')],
                 responses: { 200: { description: 'Patient found' }, 404: { description: 'Not found' } }
             }
@@ -295,6 +306,7 @@ const spec = {
         '/api/appointments/whatsapp': {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Book via WhatsApp bot (wa_id)',
+                security: [],
                 requestBody: body({
                     wa_id: '9876543210',
                     doctor_type: 'PULMONARY',
@@ -342,6 +354,7 @@ const spec = {
         '/api/appointments/by-mobile/{mobile}': {
             get: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Get upcoming appointments by mobile number',
+                security: [],
                 parameters: [pathParam('mobile', '9876543210', 'Patient mobile number or wa_id')],
                 responses: {
                     200: { description: 'Upcoming confirmed/booked appointments for this patient' },
@@ -353,6 +366,7 @@ const spec = {
         '/api/appointments/by-wa/{wa_id}': {
             get: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Get upcoming appointments by WhatsApp ID',
+                security: [],
                 parameters: [pathParam('wa_id', '9876543210', '10-digit mobile or raw wa_id')],
                 responses: {
                     200: { description: 'Upcoming appointments' },

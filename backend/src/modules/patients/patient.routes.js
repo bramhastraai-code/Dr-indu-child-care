@@ -18,16 +18,16 @@ const auth = require('../../middleware/auth');
 
 // Public form registration (No auth required)
 router.post('/form', validate(register), registerFromForm);
+router.post('/whatsapp', validate(register), registerFromWhatsapp);
+router.get('/by-mobile/:mobile', getPatientByMobile);
 
 // Protected routes (Require JWT or API Key)
 router.use(auth);
 
 router.post('/', authorize(['superadmin', 'admin', 'staff']), validate(register), registerPatient);
-router.post('/whatsapp', authorize(['bot_service', 'superadmin']), validate(register), registerFromWhatsapp);
 
 // Lookup and Management
 router.get('/', authorize(['superadmin', 'admin', 'staff']), getPatients);
-router.get('/by-mobile/:mobile', authorize(['bot_service', 'superadmin', 'admin', 'staff']), getPatientByMobile);
 router.get('/:patient_id', authorize(['superadmin', 'admin', 'staff']), getPatientById);
 router.put('/:patient_id', authorize(['superadmin', 'admin', 'staff']), validate(update), updatePatient);
 

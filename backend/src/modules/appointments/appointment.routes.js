@@ -30,8 +30,13 @@ const whatsappLimiter = rateLimit({
     message: { success: false, error_code: 'BOT_RATE_LIMIT', message: 'Rate limit exceeded for this WhatsApp ID' }
 });
 
-// 1. PUBLIC ROUTES (No Auth)
+// 1. PUBLIC ROUTES (No Auth / No JWT)
 router.post('/form', validate(create.keys({ mobile: Joi.string().regex(/^\d{10}$/).required(), patient_id: Joi.optional() })), bookByForm);
+router.get('/by-mobile/:mobile', getAppointmentsByMobile);
+router.get('/by-wa/:wa_id', getAppointmentsByWaId);
+router.post('/whatsapp', whatsappLimiter, validate(bookWhatsapp), bookByWhatsapp);
+router.get('/reminders/pending-24h', getPending24hReminders);
+router.patch('/reminders/:appointment_id/mark-sent', markReminderSent);
 
 // 2. PROTECTED ROUTES (Require JWT or API Key)
 router.use(auth);
@@ -90,24 +95,6 @@ router.get('/today', authorize(['superadmin', 'admin', 'staff']), getTodayAppoin
  *       404:
  *         description: No patient found for this mobile
  */
-router.get('/by-mobile/:mobile', getAppointmentsByMobile);
-
-/**
- * @openapi
- * /api/appointments/by-wa/{wa_id}:
- *   get:
- *     summary: Get upcoming appointments by WhatsApp ID (bot shortcut)
- *     description: Accepts raw wa_id formats like '919876543210@c.us'. Normalizes internally.
- *     tags: [Appointments]
- *     parameters:
- *       - in: path
- *         name: wa_id
- *         required: true
- *         schema: { type: string }
- *         example: "919876543210@c.us"
- */
-router.get('/by-wa/:wa_id', authorize(['bot_service', 'superadmin', 'admin', 'staff']), getAppointmentsByWaId);
-
 /**
  * @openapi
  * /api/appointments:
@@ -240,9 +227,6 @@ router.post('/', validate(create), createAppointment);
  *       409:
  *         description: Not registered / slot taken / already booked today
  */
-router.post('/whatsapp', whatsappLimiter, authorize(['bot_service', 'superadmin']), validate(bookWhatsapp), bookByWhatsapp);
-
-
 /**
  * @openapi
  * /api/appointments/{appointment_id}:
@@ -325,9 +309,5 @@ router.patch('/:appointment_id', authorize(['superadmin', 'admin', 'staff']), va
  *         description: Already cancelled
  */
 router.patch('/:appointment_id/cancel', cancelAppointment);
-
-// Reminder Management
-router.get('/reminders/pending-24h', authorize(['bot_service', 'superadmin', 'admin']), getPending24hReminders);
-router.patch('/reminders/:appointment_id/mark-sent', authorize(['bot_service', 'superadmin', 'admin']), markReminderSent);
 
 module.exports = router;
