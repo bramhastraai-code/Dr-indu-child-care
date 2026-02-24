@@ -19,12 +19,26 @@ const pathParam = (name, def, desc = '') => ({
 });
 
 // ── Helper: query parameter with a pre-filled default ─────────────────────────
-const queryParam = (name, def, enumVals, required = false) => ({
-    name, in: 'query', required,
-    schema: enumVals
-        ? { type: 'string', enum: enumVals, default: def }
-        : { type: 'string', default: def }
-});
+const queryParam = (name, def, enumValsOrDescription, required = false, description = '') => {
+    let enumVals;
+    let desc = description;
+
+    if (Array.isArray(enumValsOrDescription)) {
+        enumVals = enumValsOrDescription;
+    } else if (typeof enumValsOrDescription === 'string') {
+        desc = enumValsOrDescription;
+    }
+
+    return {
+        name,
+        in: 'query',
+        required,
+        description: desc,
+        schema: enumVals
+            ? { type: 'string', enum: enumVals, default: def }
+            : { type: 'string', default: def }
+    };
+};
 
 const spec = {
     openapi: '3.0.0',
@@ -41,6 +55,7 @@ const spec = {
         `,
     },
     servers: [
+        { url: '/', description: 'Current Origin (Recommended)' },
         { url: 'http://localhost:5000/', description: 'Local Development' },
         // { url: 'https://api-dr-indu-child-care.brahmaastra.ai/', description: 'Production Server' }
     ],
@@ -79,7 +94,7 @@ const spec = {
                 tags: ['Admin'], summary: 'Create a new admin user',
                 requestBody: body({
                     username: 'staff_1', email: 'staff@dicc.com', password: 'Pass@123',
-                    full_name: 'Staff Name', role: 'ADMIN'
+                    full_name: 'Staff Name', role: 'admin'
                 }),
                 responses: { 201: { description: 'Created' } }
             }
@@ -87,8 +102,8 @@ const spec = {
         '/api/admin/users/{id}': {
             patch: {
                 tags: ['Admin'], summary: 'Update an admin user',
-                parameters: [pathParam('id', 'MONGO_ID')],
-                requestBody: body({ full_name: 'Updated Name', role: 'ADMIN', is_active: true }, false),
+                parameters: [pathParam('id', '66f1c2a3b4d5e6f7890a1234')],
+                requestBody: body({ full_name: 'Updated Name', role: 'admin', is_active: true }, false),
                 responses: { 200: { description: 'Updated' } }
             }
         },

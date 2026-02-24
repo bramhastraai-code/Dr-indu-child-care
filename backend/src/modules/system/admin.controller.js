@@ -2,6 +2,20 @@ const Admin = require('../../models/Admin');
 const Token = require('../../models/Token');
 const jwt = require('jsonwebtoken');
 const audit = require('../../utils/audit');
+const mongoose = require('mongoose');
+
+const ROLE_MAP = {
+    superadmin: 'superadmin',
+    super_admin: 'superadmin',
+    admin: 'admin',
+    staff: 'staff'
+};
+
+function normalizeRole(role) {
+    if (typeof role !== 'string') return null;
+    const key = role.trim().toLowerCase().replace(/[\s-]+/g, '_');
+    return ROLE_MAP[key] || null;
+}
 
 // @desc    Admin login — issues JWT, updates last_login_at, writes audit log
 // @route   POST /api/admin/login
@@ -81,6 +95,14 @@ exports.getAdmins = async (req, res) => {
 exports.createAdmin = async (req, res) => {
     try {
         const { username, email, password, full_name, role } = req.body || {};
+        const normalizedRole = normalizeRole(role);
+
+        if (!normalizedRole) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid role. Allowed roles: superadmin, admin, staff'
+            });
+        }
 
         let adminExists = await Admin.findOne({ $or: [{ username }, { email }] });
         if (adminExists) {
@@ -92,7 +114,7 @@ exports.createAdmin = async (req, res) => {
             email,
             password_hash: password, // Pre-save hook will hash it
             full_name,
-            role
+            role: normalizedRole
         });
 
         await admin.save();
@@ -103,7 +125,7 @@ exports.createAdmin = async (req, res) => {
             entity_id: String(admin._id),
             actor: req.user ? req.user.username : 'SYSTEM',
             actor_type: req.user ? req.user.role : 'ADMIN',
-            new_value: { username, email, role, full_name }
+            new_value: { username, email, role: normalizedRole, full_name }
         });
 
         res.status(201).json({
@@ -127,7 +149,15 @@ exports.createAdmin = async (req, res) => {
 exports.updateAdmin = async (req, res) => {
     try {
         const { full_name, role, is_active, email } = req.body || {};
-        const admin = await Admin.findById(req.params.id);
+        const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid admin user id'
+            });
+        }
+
+        const admin = await Admin.findById(id);
 
         if (!admin) {
             return res.status(404).json({ success: false, message: 'User not found' });
@@ -139,7 +169,16 @@ exports.updateAdmin = async (req, res) => {
         const updateFields = {};
         if (full_name !== undefined) updateFields.full_name = full_name;
         if (email !== undefined) updateFields.email = email;
-        if (role !== undefined) updateFields.role = role;
+        if (role !== undefined) {
+            const normalizedRole = normalizeRole(role);
+            if (!normalizedRole) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid role. Allowed roles: superadmin, admin, staff'
+                });
+            }
+            updateFields.role = normalizedRole;
+        }
         if (is_active !== undefined) updateFields.is_active = is_active;
 
         await Admin.updateOne({ _id: admin._id }, { $set: updateFields });
