@@ -81,7 +81,7 @@ const sendTokenResponse = async (user, ipAddress, res) => {
  */
 exports.login = async (req, res) => {
     try {
-        const { username, password } = req.body;
+        const { username, password } = req.body || {};
         const ipAddress = req.ip;
 
         if (!username || !password) {

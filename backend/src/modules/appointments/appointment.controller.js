@@ -21,9 +21,10 @@ const generateAppointmentId = async () => {
 };
 
 const enrichAppointment = async (a) => {
-    const [patient, slot, mrdEntry] = await Promise.all([
+    const [patient, slot, availability, mrdEntry] = await Promise.all([
         Patient.findOne({ patient_id: a.patient_id }),
         Slot.findOne({ slot_id: a.slot_id }),
+        SlotAvailability.findOne({ slot_id: a.slot_id, slot_date: a.appointment_date, doctor_type: a.doctor_type }),
         MRD.findOne({ 'entries.appointment_id': a.appointment_id })
     ]);
     return {
@@ -33,9 +34,9 @@ const enrichAppointment = async (a) => {
         // Keep `parent_mobile` for backward compatibility in API responses.
         parent_mobile: patient?.mobile || null,
         mobile: patient?.mobile || null,
-        slot_label: slot ? (slot.slot_label || slot.display_label) : null,
-        start_time: slot?.start_time || null,
-        end_time: slot?.end_time || null,
+        slot_label: availability?.custom_label || slot?.slot_label || slot?.display_label || null,
+        start_time: availability?.custom_start_time || slot?.start_time || null,
+        end_time: availability?.custom_end_time || slot?.end_time || null,
         session: slot?.session || null,
         has_mrd_entry: !!mrdEntry
     };
@@ -139,6 +140,36 @@ exports.createAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid appointment_date. Use YYYY-MM-DD.' });
         }
 
+        // Check if date is in the past (before today)
+        const today = toMidnight(new Date());
+        if (queryDate < today) {
+            return res.status(400).json({ success: false, message: 'Cannot book appointments in the past.' });
+        }
+
+        // 0. Fetch the slot template early
+        const slot = await Slot.findOne({ slot_id });
+        if (!slot) {
+            return res.status(404).json({ success: false, message: 'Slot not found.' });
+        }
+
+        // Check if slot time has passed for today
+        const now = new Date();
+        const isToday = queryDate.getUTCFullYear() === now.getUTCFullYear() &&
+            queryDate.getUTCMonth() === now.getUTCMonth() &&
+            queryDate.getUTCDate() === now.getUTCDate();
+
+        if (isToday) {
+            // Check for daily overrides first (using existing SlotAvailability if any)
+            const availability = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null });
+            const [h, m] = (availability?.custom_start_time || slot.start_time).split(':');
+            const slotTime = new Date(queryDate);
+            slotTime.setUTCHours(h, m, 0, 0);
+
+            if (slotTime < new Date(now.getTime() - 5 * 60 * 1000)) {
+                return res.status(400).json({ success: false, message: 'This slot time has already passed for today.' });
+            }
+        }
+
         // 1. Slot conflict — physical slots can be shared if doctor_id is specified
         const slotTaken = await SlotAvailability.findOne({
             slot_id,
@@ -164,8 +195,7 @@ exports.createAppointment = async (req, res) => {
             });
         }
 
-        // 3. Get slot for time label
-        const slot = await Slot.findOne({ slot_id });
+
 
         // 4. Create appointment
         const appointment_id = await generateAppointmentId();
@@ -356,6 +386,31 @@ exports.updateAppointment = async (req, res) => {
             const newDate = appointment_date ? toMidnight(appointment_date) : appt.appointment_date;
             const newSlotId = slot_id || appt.slot_id;
             const newDocType = doctor_type || appt.doctor_type;
+
+            // Prevent rescheduling to past
+            const today = toMidnight(new Date());
+            if (newDate < today) {
+                return res.status(400).json({ success: false, message: 'Cannot reschedule to a past date.' });
+            }
+
+            const slotTemplate = await Slot.findOne({ slot_id: newSlotId });
+            if (!slotTemplate) return res.status(404).json({ success: false, message: 'Target slot template not found.' });
+
+            const now = new Date();
+            const isToday = newDate.getUTCFullYear() === now.getUTCFullYear() &&
+                newDate.getUTCMonth() === now.getUTCMonth() &&
+                newDate.getUTCDate() === now.getUTCDate();
+
+            if (isToday) {
+                const availability = await SlotAvailability.findOne({ slot_id: newSlotId, slot_date: newDate, doctor_type: newDocType });
+                const [h, m] = (availability?.custom_start_time || slotTemplate.start_time).split(':');
+                const slotTime = new Date(newDate);
+                slotTime.setUTCHours(h, m, 0, 0);
+
+                if (slotTime < new Date(now.getTime() - 5 * 60 * 1000)) {
+                    return res.status(400).json({ success: false, message: 'The target slot time has already passed for today.' });
+                }
+            }
 
             // Check if target slot is free
             const slotTaken = await SlotAvailability.findOne({
@@ -807,7 +862,7 @@ exports.getPending24hReminders = async (req, res) => {
 exports.markReminderSent = async (req, res) => {
     try {
         const { appointment_id } = req.params;
-        const { type } = req.body; // '24h' or '2h'
+        const { type } = req.body || {}; // '24h' or '2h'
 
         if (!['24h', '2h'].includes(type)) {
             return res.status(400).json({ success: false, message: "Type must be '24h' or '2h'" });

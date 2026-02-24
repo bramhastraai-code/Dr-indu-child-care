@@ -86,7 +86,7 @@ exports.addMRDEntry = async (req, res) => {
             appointment_id: appointment_id || null,
             visit_date: visit_date ? new Date(visit_date) : (appointment ? appointment.appointment_date : new Date()),
             visit_type: visit_type || (appointment ? appointment.visit_type : 'CONSULTATION'),
-            attending_doctor: attending_doctor || (appointment ? appointment.assigned_doctor_name : null),
+            attending_doctor: attending_doctor || (appointment ? (appointment.doctor_name || appointment.assigned_doctor_name) : null),
             chief_complaint,
             clinical_notes,
             diagnosis,
@@ -152,7 +152,8 @@ exports.updateMRDEntry = async (req, res) => {
         const entry = mrd.entries.id(id);
         if (entry.is_locked) return res.status(403).json({ success: false, message: 'Entry is locked' });
 
-        const actor = req.user ? req.user.username : (req.body.recorded_by || 'DOCTOR');
+        const body = req.body || {};
+        const actor = req.user ? req.user.username : (body.recorded_by || 'DOCTOR');
 
         // Update fields if present
         const updateable = [
@@ -162,7 +163,7 @@ exports.updateMRDEntry = async (req, res) => {
         ];
 
         updateable.forEach(f => {
-            if (req.body[f] !== undefined) entry[f] = req.body[f];
+            if (body[f] !== undefined) entry[f] = body[f];
         });
 
         entry.last_edited_by = actor;

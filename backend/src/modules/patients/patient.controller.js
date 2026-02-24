@@ -48,13 +48,17 @@ exports.registerPatient = async (req, res) => {
         const final_mobile = normalizePhone(mobile);
         const mobile_hash = hashField(final_mobile);
 
-        // Check duplicate by mobile_hash
-        const existing = await Patient.findOne({ mobile_hash, is_deleted: false });
+        // Check duplicate by mobile_hash AND child_name (siblings share mobile but have different names)
+        const existing = await Patient.findOne({
+            mobile_hash,
+            child_name: { $regex: new RegExp(`^${child_name}$`, 'i') },
+            is_deleted: false
+        });
         if (existing) {
             return res.status(409).json({
                 success: false,
                 error_code: 'PATIENT_EXISTS',
-                message: 'Patient with this mobile already exists',
+                message: 'This child is already registered with this mobile number',
                 patient_id: existing.patient_id
             });
         }
@@ -105,12 +109,14 @@ exports.registerPatient = async (req, res) => {
 
 // @desc    Register a new patient from whatsapp
 exports.registerFromWhatsapp = async (req, res) => {
+    if (!req.body) req.body = {};
     req.body.registration_source = 'whatsapp';
     return exports.registerPatient(req, res);
 };
 
 // @desc    Register a new patient from form
 exports.registerFromForm = async (req, res) => {
+    if (!req.body) req.body = {};
     req.body.registration_source = 'form';
     return exports.registerPatient(req, res);
 };

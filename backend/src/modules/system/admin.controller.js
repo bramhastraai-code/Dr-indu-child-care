@@ -8,7 +8,7 @@ const audit = require('../../utils/audit');
 // @access  Public
 exports.login = async (req, res) => {
     try {
-        const { username, password } = req.body;
+        const { username, password } = req.body || {};
 
         if (!username || !password) {
             return res.status(400).json({ success: false, message: 'Username and password are required' });
@@ -80,7 +80,7 @@ exports.getAdmins = async (req, res) => {
 // @access  Private (SUPER_ADMIN)
 exports.createAdmin = async (req, res) => {
     try {
-        const { username, email, password, full_name, role } = req.body;
+        const { username, email, password, full_name, role } = req.body || {};
 
         let adminExists = await Admin.findOne({ $or: [{ username }, { email }] });
         if (adminExists) {
@@ -126,7 +126,7 @@ exports.createAdmin = async (req, res) => {
 // @access  Private (SUPER_ADMIN)
 exports.updateAdmin = async (req, res) => {
     try {
-        const { full_name, role, is_active, email } = req.body;
+        const { full_name, role, is_active, email } = req.body || {};
         const admin = await Admin.findById(req.params.id);
 
         if (!admin) {

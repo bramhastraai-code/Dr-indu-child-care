@@ -13,7 +13,7 @@ exports.getAvailableSlots = async (req, res) => {
         }
 
         const queryDate = toMidnight(date);
-        const dayOfWeek = queryDate.getDay(); // 0=Sun … 6=Sat
+        const dayOfWeek = queryDate.getUTCDay(); // 0=Sun … 6=Sat (Timezone-safe for UTC midnight)
 
         let todayTemplates = [];
         const allTemplates = await Slot.find({ is_active: true }).sort({ start_time: 1 });
@@ -42,26 +42,52 @@ exports.getAvailableSlots = async (req, res) => {
             });
         }
 
-        // 2. Get booked/blocked slots on this date
-        const filter = { slot_date: queryDate, $or: [{ is_booked: true }, { blocked_by_admin: true }] };
+        // 2. Get all slot status on this date (including booked, blocked, or custom overrides)
+        const dailyFilter = { slot_date: queryDate };
         if (doctor_id) {
-            filter.doctor_id = doctor_id;
+            dailyFilter.doctor_id = doctor_id;
         } else {
-            filter.doctor_type = doctor_type;
+            dailyFilter.doctor_type = doctor_type;
         }
 
-        const unavailable = await SlotAvailability.find(filter);
-        const bookedSlotIds = new Set(unavailable.map(a => a.slot_id));
+        const dailyAvailability = await SlotAvailability.find(dailyFilter);
+        const statusMap = new Map(dailyAvailability.map(a => [a.slot_id, a]));
+
+        // 3. Filter and Enrich available slots
+        const now = new Date();
+        const isToday = queryDate.getUTCFullYear() === now.getUTCFullYear() &&
+            queryDate.getUTCMonth() === now.getUTCMonth() &&
+            queryDate.getUTCDate() === now.getUTCDate();
 
         const available_slots = todayTemplates
-            .filter(t => !bookedSlotIds.has(t.slot_id))
-            .map(t => ({
-                slot_id: t.slot_id,
-                label: t.slot_label || t.display_label,
-                session: t.session,
-                start_time: t.start_time,
-                end_time: t.end_time
-            }));
+            .filter(t => {
+                const status = statusMap.get(t.slot_id);
+                // Filter out if booked or blocked
+                if (status && (status.is_booked || status.blocked_by_admin)) return false;
+
+                // Filter out past slots for today
+                if (isToday) {
+                    const [h, m] = (status?.custom_start_time || t.start_time).split(':');
+                    const slotTime = new Date(queryDate);
+                    // Match the hours/minutes to the slot time
+                    // NOTE: This assumes times are stored/treated relative to the date's TZ
+                    slotTime.setUTCHours(h, m, 0, 0);
+                    // If slot time is more than 5 minutes ago, hide it
+                    if (slotTime < new Date(now.getTime() - 5 * 60 * 1000)) return false;
+                }
+
+                return true;
+            })
+            .map(t => {
+                const status = statusMap.get(t.slot_id);
+                return {
+                    slot_id: t.slot_id,
+                    label: status?.custom_label || t.slot_label || t.display_label,
+                    session: t.session,
+                    start_time: status?.custom_start_time || t.start_time,
+                    end_time: status?.custom_end_time || t.end_time
+                };
+            });
 
         res.json({
             success: true,
@@ -88,7 +114,7 @@ exports.getDailyStatus = async (req, res) => {
         }
 
         const queryDate = toMidnight(date);
-        const templates = await Slot.find().sort({ sort_order: 1 });
+        const templates = await Slot.find({ is_active: true }).sort({ sort_order: 1 });
 
         const filter = { slot_date: queryDate };
         if (doctor_id) {
@@ -136,7 +162,7 @@ exports.getDailyStatus = async (req, res) => {
 // @route   POST /api/slots/block
 exports.blockSlot = async (req, res) => {
     try {
-        const { slots, slot_date, doctor_type, doctor_id, reason, blocked_by } = req.body;
+        const { slots, slot_date, doctor_type, doctor_id, reason, blocked_by } = req.body || {};
 
         if (!slots || !Array.isArray(slots) || !slot_date || !doctor_type) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -179,7 +205,7 @@ exports.blockSlot = async (req, res) => {
 // @route   POST /api/slots/unblock
 exports.unblockSlot = async (req, res) => {
     try {
-        const { slots, slot_date, doctor_type, doctor_id } = req.body;
+        const { slots, slot_date, doctor_type, doctor_id } = req.body || {};
 
         if (!slots || !Array.isArray(slots) || !slot_date || !doctor_type) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -232,7 +258,7 @@ exports.getSlotConfig = async (req, res) => {
 // @route   PUT /api/slots/config
 exports.updateSlotConfig = async (req, res) => {
     try {
-        const { slots } = req.body;
+        const { slots } = req.body || {};
         const actor = req.user?.username || 'ADMIN';
 
         const ops = slots.map(s =>
@@ -262,7 +288,7 @@ exports.updateSlotConfig = async (req, res) => {
 // @route   POST /api/slots/daily-update
 exports.updateDailySlot = async (req, res) => {
     try {
-        const { slot_id, slot_date, doctor_type, doctor_id, custom_label, custom_start_time, custom_end_time } = req.body;
+        const { slot_id, slot_date, doctor_type, doctor_id, custom_label, custom_start_time, custom_end_time } = req.body || {};
 
         if (!slot_id || !slot_date || !doctor_type) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -301,7 +327,7 @@ exports.updateDailySlot = async (req, res) => {
 // @route   POST /api/slots/config/add  — create a new slot template
 exports.createSlot = async (req, res) => {
     try {
-        const { slot_label, start_time, end_time, session, sort_order } = req.body;
+        const { slot_label, start_time, end_time, session, sort_order } = req.body || {};
         if (!slot_label || !start_time || !end_time || !session) {
             return res.status(400).json({ success: false, message: 'slot_label, start_time, end_time and session are required' });
         }
@@ -331,8 +357,12 @@ exports.deleteSlot = async (req, res) => {
         const slot = await Slot.findOne({ slot_id });
         if (!slot) return res.status(404).json({ success: false, message: 'Slot not found' });
 
-        // If slot has live bookings → soft-delete (deactivate) only
-        const used = await SlotAvailability.exists({ slot_id, is_booked: true });
+        // If slot has live/future bookings → soft-delete (deactivate) only
+        const used = await SlotAvailability.exists({
+            slot_id,
+            is_booked: true,
+            slot_date: { $gte: toMidnight(new Date()) }
+        });
         if (used) {
             await Slot.findOneAndUpdate({ slot_id }, { is_active: false });
             return res.json({ success: true, message: 'Slot deactivated (existing bookings preserved)', soft: true });
