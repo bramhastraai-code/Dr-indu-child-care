@@ -4,8 +4,6 @@ const dotenv = require('dotenv');
 const morgan = require('morgan');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
-const rateLimit = require('express-rate-limit');
-
 
 const corsMiddleware = require('./middleware/cors');
 const setupSwagger = require('./swagger');
@@ -28,29 +26,10 @@ app.use(helmet({
 app.use(express.json({ limit: '10kb' })); // Limit body size
 app.use(cookieParser());
 
-
-
-
-
 // Dev logging middleware
 if (process.env.NODE_ENV === 'development') {
     app.use(morgan('dev'));
 }
-
-// Rate Limiting
-const generalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
-    message: { success: false, error_code: 'TOO_MANY_REQUESTS', message: 'Too many requests from this IP' }
-});
-// app.use('/api', generalLimiter);
-
-const loginLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-    message: { success: false, error_code: 'LOGIN_LIMIT_EXCEEDED', message: 'Too many login attempts, try again in 15 minutes' }
-});
-// app.use('/api/admin/login', loginLimiter);
 
 // Enable CORS
 app.use(corsMiddleware);
