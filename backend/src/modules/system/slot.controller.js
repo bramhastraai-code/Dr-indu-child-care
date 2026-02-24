@@ -6,10 +6,10 @@ const { toMidnight } = require('../../utils/helpers');
 // @route   GET /api/slots/available
 exports.getAvailableSlots = async (req, res) => {
     try {
-        const { doctor_type, date, doctor_id } = req.query;
+        const { doctor_name, date, doctor_id } = req.query;
 
-        if (!doctor_type || !date) {
-            return res.status(400).json({ success: false, message: 'doctor_type and date are required' });
+        if (!doctor_name || !date) {
+            return res.status(400).json({ success: false, message: 'doctor_name and date are required' });
         }
 
         const queryDate = toMidnight(date);
@@ -25,9 +25,9 @@ exports.getAvailableSlots = async (req, res) => {
 
             const doctorSlotIds = doctor.available_slots?.get(dayOfWeek.toString()) || [];
             if (doctorSlotIds.length === 0) {
-                // If no specific slots for doctor on this day, fallback to doctor_type templates
+                // If no specific slots for doctor on this day, fallback to doctor_name templates
                 todayTemplates = allTemplates.filter(t => {
-                    const perDoctor = t.days_by_doctor?.get(doctor_type);
+                    const perDoctor = t.days_by_doctor?.get(doctor_name);
                     const activeDays = (perDoctor && perDoctor.length > 0) ? perDoctor : (t.days_of_week || [0, 1, 2, 3, 4, 5, 6]);
                     return activeDays.includes(dayOfWeek);
                 });
@@ -36,7 +36,7 @@ exports.getAvailableSlots = async (req, res) => {
             }
         } else {
             todayTemplates = allTemplates.filter(t => {
-                const perDoctor = t.days_by_doctor?.get(doctor_type);
+                const perDoctor = t.days_by_doctor?.get(doctor_name);
                 const activeDays = (perDoctor && perDoctor.length > 0) ? perDoctor : (t.days_of_week || [0, 1, 2, 3, 4, 5, 6]);
                 return activeDays.includes(dayOfWeek);
             });
@@ -47,7 +47,7 @@ exports.getAvailableSlots = async (req, res) => {
         if (doctor_id) {
             dailyFilter.doctor_id = doctor_id;
         } else {
-            dailyFilter.doctor_type = doctor_type;
+            dailyFilter.doctor_name = doctor_name;
         }
 
         const dailyAvailability = await SlotAvailability.find(dailyFilter);
@@ -89,10 +89,18 @@ exports.getAvailableSlots = async (req, res) => {
                 };
             });
 
+        let doctor_speciality = null;
+        if (doctor_id) {
+            const Doctor = require('../../models/Doctor');
+            const doc = await Doctor.findOne({ doctor_id });
+            if (doc) doctor_speciality = doc.speciality;
+        }
+
         res.json({
             success: true,
             date,
-            doctor_type,
+            doctor_name,
+            doctor_speciality,
             doctor_id: doctor_id || null,
             day_of_week: dayOfWeek,
             is_clinic_open: true,
@@ -108,9 +116,9 @@ exports.getAvailableSlots = async (req, res) => {
 // @route   GET /api/slots/daily-status
 exports.getDailyStatus = async (req, res) => {
     try {
-        const { doctor_type, date, doctor_id } = req.query;
-        if (!doctor_type || !date) {
-            return res.status(400).json({ success: false, message: 'doctor_type and date are required' });
+        const { doctor_name, date, doctor_id } = req.query;
+        if (!doctor_name || !date) {
+            return res.status(400).json({ success: false, message: 'doctor_name and date are required' });
         }
 
         const queryDate = toMidnight(date);
@@ -120,7 +128,7 @@ exports.getDailyStatus = async (req, res) => {
         if (doctor_id) {
             filter.doctor_id = doctor_id;
         } else {
-            filter.doctor_type = doctor_type;
+            filter.doctor_name = doctor_name;
         }
 
         const availability = await SlotAvailability.find(filter);
@@ -153,7 +161,7 @@ exports.getDailyStatus = async (req, res) => {
             };
         });
 
-        res.json({ success: true, date, doctor_type, doctor_id: doctor_id || null, data });
+        res.json({ success: true, date, doctor_name, doctor_id: doctor_id || null, data });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -162,9 +170,9 @@ exports.getDailyStatus = async (req, res) => {
 // @route   POST /api/slots/block
 exports.blockSlot = async (req, res) => {
     try {
-        const { slots, slot_date, doctor_type, doctor_id, reason, blocked_by } = req.body || {};
+        const { slots, slot_date, doctor_name, doctor_id, reason, blocked_by } = req.body || {};
 
-        if (!slots || !Array.isArray(slots) || !slot_date || !doctor_type) {
+        if (!slots || !Array.isArray(slots) || !slot_date || !doctor_name) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
 
@@ -173,7 +181,7 @@ exports.blockSlot = async (req, res) => {
 
         const ops = slots.map(slot_id =>
             SlotAvailability.findOneAndUpdate(
-                { slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null },
+                { slot_id, slot_date: queryDate, doctor_name, doctor_id: doctor_id || null },
                 {
                     is_booked: false,
                     blocked_by_admin: true,
@@ -190,7 +198,7 @@ exports.blockSlot = async (req, res) => {
         await audit({
             event_type: 'SLOT_BLOCKED',
             entity_type: 'time_slots',
-            entity_id: `${doctor_type}_${slot_date}`,
+            entity_id: `${doctor_name}_${slot_date}`,
             actor,
             actor_type: req.user ? req.user.role : 'SECRETARY',
             new_value: { slots, reason }
@@ -205,9 +213,9 @@ exports.blockSlot = async (req, res) => {
 // @route   POST /api/slots/unblock
 exports.unblockSlot = async (req, res) => {
     try {
-        const { slots, slot_date, doctor_type, doctor_id } = req.body || {};
+        const { slots, slot_date, doctor_name, doctor_id } = req.body || {};
 
-        if (!slots || !Array.isArray(slots) || !slot_date || !doctor_type) {
+        if (!slots || !Array.isArray(slots) || !slot_date || !doctor_name) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
 
@@ -218,7 +226,7 @@ exports.unblockSlot = async (req, res) => {
             {
                 slot_id: { $in: slots },
                 slot_date: queryDate,
-                doctor_type,
+                doctor_name,
                 doctor_id: doctor_id || null,
                 is_booked: false // Safety: don't unblock if actually booked
             },
@@ -233,7 +241,7 @@ exports.unblockSlot = async (req, res) => {
         await audit({
             event_type: 'SLOT_UNBLOCKED',
             entity_type: 'time_slots',
-            entity_id: `${doctor_type}_${slot_date}`,
+            entity_id: `${doctor_name}_${slot_date}`,
             actor,
             actor_type: req.user ? req.user.role : 'SECRETARY',
             new_value: { slots }
@@ -288,9 +296,9 @@ exports.updateSlotConfig = async (req, res) => {
 // @route   POST /api/slots/daily-update
 exports.updateDailySlot = async (req, res) => {
     try {
-        const { slot_id, slot_date, doctor_type, doctor_id, custom_label, custom_start_time, custom_end_time } = req.body || {};
+        const { slot_id, slot_date, doctor_name, doctor_id, custom_label, custom_start_time, custom_end_time } = req.body || {};
 
-        if (!slot_id || !slot_date || !doctor_type) {
+        if (!slot_id || !slot_date || !doctor_name) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
 
@@ -298,7 +306,7 @@ exports.updateDailySlot = async (req, res) => {
         const actor = req.user?.username || 'ADMIN';
 
         const updated = await SlotAvailability.findOneAndUpdate(
-            { slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null },
+            { slot_id, slot_date: queryDate, doctor_name, doctor_id: doctor_id || null },
             {
                 custom_label,
                 custom_start_time,

@@ -20,11 +20,34 @@ const generateAppointmentId = async () => {
     return `${prefix}${seq.toString().padStart(5, '0')}`;
 };
 
+const resolveDoctorDetails = async ({ doctor_id, doctor_name, doctor_speciality }) => {
+    let finalId = doctor_id || null;
+    let finalName = doctor_name;
+    let finalSpeciality = doctor_speciality;
+
+    if (doctor_id) {
+        const doc = await Doctor.findOne({ doctor_id });
+        if (doc) {
+            finalName = doc.name;
+            if (!finalSpeciality) finalSpeciality = doc.speciality;
+        }
+    } else if (doctor_name) {
+        // Try fuzzy name match if no ID provided
+        const doc = await Doctor.findOne({ name: { $regex: new RegExp(`^${doctor_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
+        if (doc) {
+            finalId = doc.doctor_id;
+            if (!finalSpeciality) finalSpeciality = doc.speciality;
+            finalName = doc.name; // Use canonical name
+        }
+    }
+    return { finalId, finalName, finalSpeciality };
+};
+
 const enrichAppointment = async (a) => {
     const [patient, slot, availability, mrdEntry] = await Promise.all([
         Patient.findOne({ patient_id: a.patient_id }),
         Slot.findOne({ slot_id: a.slot_id }),
-        SlotAvailability.findOne({ slot_id: a.slot_id, slot_date: a.appointment_date, doctor_type: a.doctor_type }),
+        SlotAvailability.findOne({ slot_id: a.slot_id, slot_date: a.appointment_date, doctor_name: a.doctor_name }),
         MRD.findOne({ 'entries.appointment_id': a.appointment_id })
     ]);
     return {
@@ -32,8 +55,8 @@ const enrichAppointment = async (a) => {
         child_name: patient?.child_name || null,
         parent_name: patient?.parent_name || null,
         // Keep `parent_mobile` for backward compatibility in API responses.
-        parent_mobile: patient?.mobile || null,
-        mobile: patient?.mobile || null,
+        parent_wa_id: patient?.wa_id || null,
+        wa_id: a.wa_id || patient?.wa_id || null,
         slot_label: availability?.custom_label || slot?.slot_label || slot?.display_label || null,
         start_time: availability?.custom_start_time || slot?.start_time || null,
         end_time: availability?.custom_end_time || slot?.end_time || null,
@@ -46,7 +69,7 @@ const enrichAppointment = async (a) => {
 // List appointments with filters: date, patient_id, status, source, page, limit
 exports.getAppointments = async (req, res) => {
     try {
-        const { date, patient_id, doctor_id, doctor_type, status, source, page = 1, limit = 50 } = req.query;
+        const { date, patient_id, doctor_id, doctor_name, status, source, page = 1, limit = 50 } = req.query;
         const filter = { is_deleted: false };
 
         if (date) {
@@ -55,7 +78,7 @@ exports.getAppointments = async (req, res) => {
         }
         if (patient_id) filter.patient_id = patient_id;
         if (doctor_id) filter.doctor_id = doctor_id;
-        if (doctor_type) filter.doctor_type = doctor_type.toUpperCase();
+        if (doctor_name) filter.doctor_name = new RegExp(doctor_name, 'i');
         if (status) filter.status = status.toUpperCase();
         if (source) filter.booking_source = source.toLowerCase();
 
@@ -86,8 +109,9 @@ exports.createAppointment = async (req, res) => {
         const {
             patient_id,
             mobile, wa_id,
-            doctor_type,
+            doctor_name,
             doctor_id,
+            doctor_speciality,
             appointment_date,
             slot_id,
             visit_type,
@@ -107,8 +131,8 @@ exports.createAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: `booking_source must be one of: ${validSources.join(', ')}` });
         }
 
-        if (!appointment_date || !slot_id || !doctor_type) {
-            return res.status(400).json({ success: false, error_code: 'VALIDATION_ERROR', message: 'appointment_date, slot_id, and doctor_type are required.' });
+        if (!appointment_date || !slot_id || (!doctor_name && !doctor_id)) {
+            return res.status(400).json({ success: false, error_code: 'VALIDATION_ERROR', message: 'appointment_date, slot_id, and doctor_name are required.' });
         }
 
         // Resolve patient
@@ -116,16 +140,13 @@ exports.createAppointment = async (req, res) => {
         if (patient_id) {
             patient = await Patient.findOne({ patient_id, is_deleted: false });
         } else if (mobile || wa_id) {
-            const lookupValue = mobile || wa_id;
-            const normalizedWaId = normalizeWaId(lookupValue);
-            const normalizedMobile = normalizePhone(lookupValue);
-            const mobileHash = hashField(normalizedMobile);
+            const lookupValue = wa_id || mobile;
+            const normalized = normalizeWaId(lookupValue);
+            const wa_hash = hashField(normalizePhone(lookupValue));
             patient = await Patient.findOne({
                 $or: [
-                    { mobile_hash: mobileHash },
-                    { wa_id: lookupValue },
-                    { wa_id: normalizedWaId },
-                    { wa_id: normalizedMobile }
+                    { wa_hash },
+                    { wa_id: normalized }
                 ],
                 is_deleted: false
             });
@@ -133,6 +154,13 @@ exports.createAppointment = async (req, res) => {
 
         if (!patient) {
             return res.status(404).json({ success: false, error_code: 'PATIENT_NOT_FOUND', message: 'Patient not found or not registered.' });
+        }
+
+        // Resolve doctor name and speciality
+        const { finalId: finalDoctorId, finalName: finalDoctorName, finalSpeciality: finalDoctorSpeciality } = await resolveDoctorDetails({ doctor_id, doctor_name, doctor_speciality });
+
+        if (!finalDoctorName) {
+            return res.status(400).json({ success: false, message: 'doctor_name is required.' });
         }
 
         const queryDate = toMidnight(appointment_date);
@@ -160,7 +188,7 @@ exports.createAppointment = async (req, res) => {
 
         if (isToday) {
             // Check for daily overrides first (using existing SlotAvailability if any)
-            const availability = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null });
+            const availability = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName });
             const [h, m] = (availability?.custom_start_time || slot.start_time).split(':');
             const slotTime = new Date(queryDate);
             slotTime.setUTCHours(h, m, 0, 0);
@@ -170,11 +198,11 @@ exports.createAppointment = async (req, res) => {
             }
         }
 
-        // 1. Slot conflict — physical slots can be shared if doctor_id is specified
+        // 1. Slot conflict — physical slots can be shared if doctor_id/name is specified
         const slotTaken = await SlotAvailability.findOne({
             slot_id,
             slot_date: queryDate,
-            doctor_type,
+            doctor_name: finalDoctorName,
             doctor_id: doctor_id || null, // Check conflict for specific doctor or general slot
             $or: [{ is_booked: true }, { blocked_by_admin: true }]
         });
@@ -195,26 +223,17 @@ exports.createAppointment = async (req, res) => {
             });
         }
 
-
-
         // 4. Create appointment
         const appointment_id = await generateAppointmentId();
-
-        // Auto-fill doctor name if doctor_id is provided
-        let assignedDoctorName = null;
-        if (doctor_id) {
-            const doc = await Doctor.findOne({ doctor_id });
-            if (doc) assignedDoctorName = doc.name;
-        }
 
         await Appointment.create({
             appointment_id,
             patient_id: patient.patient_id,
             visit_type: visit_type || 'CONSULTATION',
             appointment_mode: appointment_mode || 'OFFLINE',
-            doctor_type,
-            doctor_id: doctor_id || null,
-            doctor_name: assignedDoctorName,
+            doctor_id: finalDoctorId,
+            doctor_name: finalDoctorName,
+            doctor_speciality: finalDoctorSpeciality,
             appointment_date: queryDate,
             slot_id,
             appointment_time: slot?.start_time || null,
@@ -228,11 +247,11 @@ exports.createAppointment = async (req, res) => {
         });
 
         // 5. Mark slot as booked
-        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null });
+        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName });
         if (avail) {
-            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_type, doctor_id: doctor_id || null } });
+            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_name: finalDoctorName, doctor_id: finalDoctorId } });
         } else {
-            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null, is_booked: true, blocked_by_admin: false, appointment_id });
+            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName, doctor_id: finalDoctorId, is_booked: true, blocked_by_admin: false, appointment_id });
         }
 
         // 6. Audit
@@ -251,13 +270,14 @@ exports.createAppointment = async (req, res) => {
                 appointment_id,
                 patient_id: patient.patient_id,
                 child_name: patient.child_name,
+                wa_id: patient.wa_id,
                 status: 'CONFIRMED',
                 booking_source,
                 appointment_date: queryDate,
                 appointment_time: slot?.start_time || null,
-                doctor_type,
+                doctor_name: finalDoctorName,
+                doctor_speciality: finalDoctorSpeciality,
                 doctor_id: doctor_id || null,
-                doctor_name: assignedDoctorName,
                 visit_type: visit_type || 'CONSULTATION',
                 appointment_mode: appointment_mode || 'OFFLINE',
                 slot: slot ? { slot_id, label: slot.slot_label || slot.display_label } : { slot_id }
@@ -322,19 +342,18 @@ exports.getAppointmentStats = async (req, res) => {
 // Lookup upcoming appointments by mobile number (replaces /by-wa/:wa_id)
 exports.getAppointmentsByMobile = async (req, res) => {
     try {
-        const rawMobile = req.params.mobile;
-        const normalizedMobile = normalizePhone(rawMobile);
-        const mobileHash = hashField(normalizedMobile);
+        const raw = req.params.mobile || req.params.wa_id;
+        const normalized = normalizeWaId(raw);
+        const wa_hash = hashField(normalizePhone(raw));
 
         const patient = await Patient.findOne({
             $or: [
-                { mobile_hash: mobileHash },
-                { wa_id: rawMobile },
-                { wa_id: normalizedMobile }
+                { wa_hash },
+                { wa_id: normalized }
             ],
             is_deleted: false
         });
-        if (!patient) return res.status(404).json({ success: false, message: `No patient found for mobile ${rawMobile}` });
+        if (!patient) return res.status(404).json({ success: false, message: `No patient found for ${raw}` });
 
         const appointments = await Appointment.find({
             patient_id: patient.patient_id,
@@ -347,7 +366,7 @@ exports.getAppointmentsByMobile = async (req, res) => {
             success: true,
             patient_id: patient.patient_id,
             child_name: patient.child_name,
-            mobile: patient.mobile || normalizedMobile,
+            wa_id: patient.wa_id || normalized,
             data: enriched
         });
     } catch (err) {
@@ -373,7 +392,7 @@ exports.getAppointmentById = async (req, res) => {
 exports.updateAppointment = async (req, res) => {
     try {
         const { appointment_id } = req.params;
-        const { appointment_date, slot_id, doctor_type, visit_type, appointment_mode, reason } = req.body || {};
+        const { appointment_date, slot_id, doctor_name, doctor_id, doctor_speciality, visit_type, appointment_mode, reason } = req.body || {};
 
         const appt = await Appointment.findOne({ appointment_id });
         if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
@@ -382,10 +401,20 @@ exports.updateAppointment = async (req, res) => {
         const updates = { last_updated_at: new Date(), last_updated_by: req.user?.username || 'SYSTEM' };
 
         // Handle slot change (reschedule)
-        if (appointment_date || slot_id) {
+        if (appointment_date || slot_id || doctor_name || doctor_id) {
             const newDate = appointment_date ? toMidnight(appointment_date) : appt.appointment_date;
             const newSlotId = slot_id || appt.slot_id;
-            const newDocType = doctor_type || appt.doctor_type;
+            let newDocName = doctor_name || appt.doctor_name;
+            let newDocId = doctor_id || appt.doctor_id;
+            let newDocSpeciality = doctor_speciality || appt.doctor_speciality;
+
+            if (doctor_id && doctor_id !== appt.doctor_id) {
+                const doc = await Doctor.findOne({ doctor_id });
+                if (doc) {
+                    newDocName = doc.name;
+                    newDocSpeciality = doc.speciality;
+                }
+            }
 
             // Prevent rescheduling to past
             const today = toMidnight(new Date());
@@ -402,7 +431,7 @@ exports.updateAppointment = async (req, res) => {
                 newDate.getUTCDate() === now.getUTCDate();
 
             if (isToday) {
-                const availability = await SlotAvailability.findOne({ slot_id: newSlotId, slot_date: newDate, doctor_type: newDocType });
+                const availability = await SlotAvailability.findOne({ slot_id: newSlotId, slot_date: newDate, doctor_name: newDocName });
                 const [h, m] = (availability?.custom_start_time || slotTemplate.start_time).split(':');
                 const slotTime = new Date(newDate);
                 slotTime.setUTCHours(h, m, 0, 0);
@@ -416,6 +445,7 @@ exports.updateAppointment = async (req, res) => {
             const slotTaken = await SlotAvailability.findOne({
                 slot_id: newSlotId,
                 slot_date: newDate,
+                doctor_name: newDocName,
                 $or: [{ is_booked: true }, { blocked_by_admin: true }]
             });
             if (slotTaken && slotTaken.appointment_id !== appointment_id) {
@@ -424,23 +454,25 @@ exports.updateAppointment = async (req, res) => {
 
             // Free old slot
             await SlotAvailability.updateOne(
-                { slot_id: appt.slot_id, slot_date: appt.appointment_date },
+                { slot_id: appt.slot_id, slot_date: appt.appointment_date, doctor_name: appt.doctor_name },
                 { $set: { is_booked: false, appointment_id: null } }
             );
 
             // Book new slot
-            const newAvail = await SlotAvailability.findOne({ slot_id: newSlotId, slot_date: newDate });
+            const newAvail = await SlotAvailability.findOne({ slot_id: newSlotId, slot_date: newDate, doctor_name: newDocName });
             if (newAvail) {
-                await SlotAvailability.updateOne({ _id: newAvail._id }, { $set: { is_booked: true, appointment_id, doctor_type: newDocType } });
+                await SlotAvailability.updateOne({ _id: newAvail._id }, { $set: { is_booked: true, appointment_id, doctor_name: newDocName } });
             } else {
-                await SlotAvailability.create({ slot_id: newSlotId, slot_date: newDate, doctor_type: newDocType, is_booked: true, blocked_by_admin: false, appointment_id });
+                await SlotAvailability.create({ slot_id: newSlotId, slot_date: newDate, doctor_name: newDocName, is_booked: true, blocked_by_admin: false, appointment_id });
             }
 
             const newSlot = await Slot.findOne({ slot_id: newSlotId });
             updates.appointment_date = newDate;
             updates.slot_id = newSlotId;
             updates.appointment_time = newSlot?.start_time || null;
-            updates.doctor_type = newDocType;
+            updates.doctor_name = newDocName;
+            updates.doctor_id = newDocId;
+            updates.doctor_speciality = newDocSpeciality;
         }
 
         if (visit_type) updates.visit_type = visit_type;
@@ -490,7 +522,7 @@ exports.cancelAppointment = async (req, res) => {
 
         // Free the slot
         await SlotAvailability.updateOne(
-            { slot_id: appt.slot_id, slot_date: appt.appointment_date },
+            { slot_id: appt.slot_id, slot_date: appt.appointment_date, doctor_name: appt.doctor_name },
             { $set: { is_booked: false, appointment_id: null } }
         );
 
@@ -520,16 +552,12 @@ exports.getAppointmentsByWaId = async (req, res) => {
     try {
         const rawWaId = req.params.wa_id;
         const normalized = normalizeWaId(rawWaId);
-        const mobile = extractMobile(rawWaId);
-        const mobileHash = hashField(normalizePhone(mobile));
+        const wa_hash = hashField(normalizePhone(extractMobile(rawWaId)));
 
-        // Find patient by raw wa_id stored on Patient, or by extracted mobile
         const patient = await Patient.findOne({
             $or: [
-                { wa_id: normalized },
-                { wa_id: rawWaId },
-                { wa_id: mobile },
-                { mobile_hash: mobileHash }
+                { wa_hash },
+                { wa_id: normalized }
             ],
             is_deleted: false
         });
@@ -565,8 +593,9 @@ exports.bookByWhatsapp = async (req, res) => {
     try {
         const {
             wa_id: rawWaId,
-            doctor_type,
+            doctor_name,
             doctor_id,
+            doctor_speciality,
             visit_type,
             appointment_mode,
             appointment_date,
@@ -574,26 +603,23 @@ exports.bookByWhatsapp = async (req, res) => {
             reason
         } = req.body || {};
 
-        if (!rawWaId || !appointment_date || !slot_id || !doctor_type) {
+        if (!rawWaId || !appointment_date || !slot_id || (!doctor_name && !doctor_id)) {
             return res.status(400).json({
                 success: false,
-                message: 'wa_id, appointment_date, slot_id, and doctor_type are required.'
+                message: 'wa_id, appointment_date, slot_id, and doctor_name (or doctor_id) are required.'
             });
         }
 
         // Step 1: Normalize wa_id
         const normalized = normalizeWaId(rawWaId);
         // Step 2: Extract local mobile
-        const mobile = extractMobile(rawWaId);
-        const mobileHash = hashField(normalizePhone(mobile));
+        const wa_hash = hashField(normalizePhone(extractMobile(rawWaId)));
 
         // Step 3: Check patient exists
         const patient = await Patient.findOne({
             $or: [
                 { wa_id: normalized },
-                { wa_id: rawWaId },
-                { wa_id: mobile },
-                { mobile_hash: mobileHash }
+                { wa_hash }
             ],
             is_deleted: false
         });
@@ -612,10 +638,16 @@ exports.bookByWhatsapp = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid appointment_date. Use YYYY-MM-DD.' });
         }
 
+        // Resolve doctor name and speciality
+        const { finalId: finalDoctorId, finalName: finalDoctorName, finalSpeciality: finalDoctorSpeciality } = await resolveDoctorDetails({ doctor_id, doctor_name, doctor_speciality });
+
+        if (!finalDoctorName) {
+            return res.status(400).json({ success: false, message: 'doctor_name is required.' });
+        }
+
         const slotTaken = await SlotAvailability.findOne({
             slot_id, slot_date: queryDate,
-            doctor_type,
-            doctor_id: doctor_id || null,
+            doctor_name: finalDoctorName,
             $or: [{ is_booked: true }, { blocked_by_admin: true }]
         });
         if (slotTaken) {
@@ -637,21 +669,14 @@ exports.bookByWhatsapp = async (req, res) => {
         const slot = await Slot.findOne({ slot_id });
         const appointment_id = await generateAppointmentId();
 
-        // Auto-fill doctor name if doctor_id is provided
-        let assignedDoctorName = null;
-        if (doctor_id) {
-            const doc = await Doctor.findOne({ doctor_id });
-            if (doc) assignedDoctorName = doc.name;
-        }
-
         await Appointment.create({
             appointment_id,
             patient_id: patient.patient_id,
             visit_type: visit_type || 'CONSULTATION',
             appointment_mode: appointment_mode || 'OFFLINE',
-            doctor_type,
-            doctor_id: doctor_id || null,
-            doctor_name: assignedDoctorName,
+            doctor_name: finalDoctorName,
+            doctor_speciality: finalDoctorSpeciality,
+            doctor_id: finalDoctorId,
             appointment_date: queryDate,
             slot_id,
             appointment_time: slot?.start_time || null,
@@ -666,11 +691,11 @@ exports.bookByWhatsapp = async (req, res) => {
         });
 
         // Mark slot booked
-        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null });
+        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName });
         if (avail) {
-            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_type, doctor_id: doctor_id || null } });
+            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_name: finalDoctorName, doctor_id: finalDoctorId } });
         } else {
-            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null, is_booked: true, blocked_by_admin: false, appointment_id });
+            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName, doctor_id: finalDoctorId, is_booked: true, blocked_by_admin: false, appointment_id });
         }
 
         await audit({
@@ -685,12 +710,15 @@ exports.bookByWhatsapp = async (req, res) => {
                 appointment_id,
                 patient_id: patient.patient_id,
                 child_name: patient.child_name,
-                mobile: patient.mobile || mobile,
+                wa_id: normalized,
                 status: 'CONFIRMED',
                 booking_source: 'whatsapp',
-                wa_id: normalized,
                 appointment_date: queryDate,
                 appointment_time: slot?.start_time || null,
+                doctor_name: finalDoctorName,
+                doctor_speciality: finalDoctorSpeciality,
+                doctor_id: finalDoctorId,
+                visit_type: visit_type || 'CONSULTATION',
                 slot: slot ? { slot_id, label: slot.slot_label || slot.display_label } : { slot_id }
             }
         });
@@ -708,8 +736,11 @@ exports.bookByWhatsapp = async (req, res) => {
 exports.bookByForm = async (req, res) => {
     try {
         const {
-            mobile,
-            doctor_type,
+            wa_id,
+            mobile, // fallback
+            doctor_name,
+            doctor_id,
+            doctor_speciality,
             visit_type,
             appointment_mode,
             appointment_date,
@@ -717,22 +748,22 @@ exports.bookByForm = async (req, res) => {
             reason
         } = req.body || {};
 
-        if (!mobile || !appointment_date || !slot_id || !doctor_type) {
+        const raw = wa_id || mobile;
+        if (!raw || !appointment_date || !slot_id || (!doctor_name && !doctor_id)) {
             return res.status(400).json({
                 success: false,
-                message: 'mobile, appointment_date, slot_id, and doctor_type are required.'
+                message: 'wa_id (or mobile), appointment_date, slot_id, and doctor_name (or doctor_id) are required.'
             });
         }
 
-        const normalizedMobile = normalizePhone(mobile);
-        const mobileHash = hashField(normalizedMobile);
+        const normalized = normalizeWaId(raw);
+        const wa_hash = hashField(normalizePhone(raw));
 
-        // Lookup patient by mobile number
+        // Lookup patient
         const patient = await Patient.findOne({
             $or: [
-                { mobile_hash: mobileHash },
-                { wa_id: mobile },
-                { wa_id: normalizedMobile }
+                { wa_hash },
+                { wa_id: normalized }
             ],
             is_deleted: false
         });
@@ -749,10 +780,16 @@ exports.bookByForm = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid appointment_date. Use YYYY-MM-DD.' });
         }
 
+        // Resolve doctor name and speciality
+        const { finalId: finalDoctorId, finalName: finalDoctorName, finalSpeciality: finalDoctorSpeciality } = await resolveDoctorDetails({ doctor_id, doctor_name, doctor_speciality });
+
+        if (!finalDoctorName) {
+            return res.status(400).json({ success: false, message: 'doctor_name is required.' });
+        }
+
         const slotTaken = await SlotAvailability.findOne({
             slot_id, slot_date: queryDate,
-            doctor_type,
-            doctor_id: doctor_id || null,
+            doctor_name: finalDoctorName,
             $or: [{ is_booked: true }, { blocked_by_admin: true }]
         });
         if (slotTaken) {
@@ -774,21 +811,14 @@ exports.bookByForm = async (req, res) => {
         const slot = await Slot.findOne({ slot_id });
         const appointment_id = await generateAppointmentId();
 
-        // Auto-fill doctor name if doctor_id is provided
-        let assignedDoctorName = null;
-        if (doctor_id) {
-            const doc = await Doctor.findOne({ doctor_id });
-            if (doc) assignedDoctorName = doc.name;
-        }
-
         await Appointment.create({
             appointment_id,
             patient_id: patient.patient_id,
             visit_type: visit_type || 'CONSULTATION',
             appointment_mode: appointment_mode || 'OFFLINE',
-            doctor_type,
-            doctor_id: doctor_id || null,
-            doctor_name: assignedDoctorName,
+            doctor_name: finalDoctorName,
+            doctor_speciality: finalDoctorSpeciality,
+            doctor_id: finalDoctorId,
             appointment_date: queryDate,
             slot_id,
             appointment_time: slot?.start_time || null,
@@ -801,17 +831,17 @@ exports.bookByForm = async (req, res) => {
             last_updated_by: 'FORM'
         });
 
-        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null });
+        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName });
         if (avail) {
-            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_type, doctor_id: doctor_id || null } });
+            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_name: finalDoctorName, doctor_id: finalDoctorId } });
         } else {
-            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_type, doctor_id: doctor_id || null, is_booked: true, blocked_by_admin: false, appointment_id });
+            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName, doctor_id: finalDoctorId, is_booked: true, blocked_by_admin: false, appointment_id });
         }
 
         await audit({
             event_type: 'APPOINTMENT_BOOKED', entity_type: 'appointment', entity_id: appointment_id,
-            actor: mobile, actor_type: 'SYSTEM',
-            new_value: { patient_id: patient.patient_id, date: appointment_date, slot_id, booking_source: 'form', doctor_id }
+            actor: raw, actor_type: 'SYSTEM',
+            new_value: { patient_id: patient.patient_id, date: appointment_date, slot_id, booking_source: 'form', doctor_id: finalDoctorId }
         });
 
         res.status(201).json({
@@ -820,11 +850,15 @@ exports.bookByForm = async (req, res) => {
                 appointment_id,
                 patient_id: patient.patient_id,
                 child_name: patient.child_name,
-                mobile: patient.mobile || normalizedMobile,
+                wa_id: patient.wa_id || normalized,
                 status: 'CONFIRMED',
                 booking_source: 'form',
                 appointment_date: queryDate,
                 appointment_time: slot?.start_time || null,
+                doctor_name: finalDoctorName,
+                doctor_speciality: finalDoctorSpeciality,
+                doctor_id: finalDoctorId,
+                visit_type: visit_type || 'CONSULTATION',
                 slot: slot ? { slot_id, label: slot.slot_label || slot.display_label } : { slot_id }
             }
         });

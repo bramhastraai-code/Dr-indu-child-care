@@ -2,11 +2,16 @@ const Doctor = require('../../models/Doctor');
 const audit = require('../../utils/audit');
 
 const generateDoctorId = async () => {
-    const prefix = 'DOC-';
-    const last = await Doctor.findOne({ doctor_id: { $regex: `^${prefix}` } })
-        .sort({ doctor_id: -1 });
-    const seq = last ? parseInt(last.doctor_id.replace(prefix, ''), 10) + 1 : 1;
-    return `${prefix}${seq.toString().padStart(5, '0')}`;
+    try {
+        const prefix = 'DOC-';
+        const last = await Doctor.findOne({ doctor_id: { $regex: `^${prefix}` } })
+            .sort({ doctor_id: -1 });
+        const seq = last ? parseInt(last.doctor_id.replace(prefix, ''), 10) + 1 : 1;
+        return `${prefix}${seq.toString().padStart(5, '0')}`;
+    } catch (err) {
+        console.error('[ERROR] generateDoctorId:', err.message);
+        throw err;
+    }
 };
 
 // GET /api/doctors
@@ -31,7 +36,7 @@ exports.getDoctorById = async (req, res) => {
 };
 
 // POST /api/doctors
-exports.createDoctor = async (req, res) => {
+exports.createDoctor = async (req, res, next) => {
     try {
         const doctor_id = await generateDoctorId();
         const doctor = await Doctor.create({
@@ -50,6 +55,7 @@ exports.createDoctor = async (req, res) => {
 
         res.status(201).json({ success: true, data: doctor });
     } catch (err) {
+        console.error('[ERROR] createDoctor:', err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 };

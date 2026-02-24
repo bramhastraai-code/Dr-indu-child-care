@@ -18,14 +18,10 @@ const AppointmentSchema = new mongoose.Schema({
         enum: ['ONLINE', 'OFFLINE'],
         default: 'OFFLINE'
     },
-    doctor_type: {
+    doctor_name: {
         type: String,
-        enum: ['PULMONARY', 'NON_PULMONARY', 'VACCINATION', 'ANY', 'CONSULTATION'],
-        required: true
-    },
-    // doctor: field alias for doctor_type (backward compatibility)
-    doctor: {
-        type: String
+        required: true,
+        index: true
     },
     doctor_id: {
         type: String,
@@ -33,8 +29,7 @@ const AppointmentSchema = new mongoose.Schema({
         default: null,
         index: true
     },
-    // New canonical API field (user-facing)
-    doctor_name: {
+    doctor_speciality: {
         type: String,
         default: null
     },

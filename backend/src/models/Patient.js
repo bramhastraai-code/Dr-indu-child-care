@@ -10,7 +10,13 @@ const PatientSchema = new mongoose.Schema({
   },
   wa_id: {
     type: String,
-    default: null,
+    required: true,
+    index: true,
+    set: encrypt,
+    get: decrypt
+  },
+  wa_hash: {
+    type: String,
     index: true
   },
   child_name: {
@@ -22,16 +28,6 @@ const PatientSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true
-  },
-  mobile: {
-    type: String,
-    required: true,
-    set: encrypt,
-    get: decrypt
-  },
-  mobile_hash: {
-    type: String,
-    index: true
   },
   email: {
     type: String,
@@ -93,17 +89,17 @@ const PatientSchema = new mongoose.Schema({
 
 // Middleware to update hashes
 PatientSchema.pre('save', function () {
-  if (this.isModified('mobile')) {
-    this.mobile_hash = hashField(decrypt(this.mobile));
+  if (this.isModified('wa_id')) {
+    this.wa_hash = hashField(decrypt(this.wa_id));
   }
   if (this.isModified('email')) {
     this.email_hash = hashField(decrypt(this.email));
   }
 });
 
-// Virtual for masked mobile
-PatientSchema.virtual('mobile_masked').get(function () {
-  return this.mobile ? maskData(this.mobile) : null;
+// Virtual for masked wa_id
+PatientSchema.virtual('wa_masked').get(function () {
+  return this.wa_id ? maskData(this.wa_id) : null;
 });
 
 module.exports = mongoose.model('Patient', PatientSchema);

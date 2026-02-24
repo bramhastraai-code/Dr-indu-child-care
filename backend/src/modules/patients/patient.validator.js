@@ -5,7 +5,7 @@ const patientSchemas = {
     register: Joi.object({
         child_name: Joi.string().trim().min(2).max(100).required(),
         parent_name: Joi.string().trim().min(2).max(100).required(),
-        mobile: Joi.string().regex(/^\d{10}$/).message('Mobile must be a 10-digit Indian number').required(),
+        wa_id: Joi.string().regex(/^\d{10}$/).message('wa_id must be a 10-digit Indian number').required(),
         email: Joi.string().email().lowercase().trim().allow('', null),
         dob: Joi.date().iso().max('now').message('DOB must be a valid past date in ISO format').allow(null),
         gender: Joi.string().valid('Male', 'Female', 'Other').allow(null),
@@ -17,7 +17,7 @@ const patientSchemas = {
     update: Joi.object({
         child_name: Joi.string().trim().min(2).max(100),
         parent_name: Joi.string().trim().min(2).max(100),
-        mobile: Joi.string().regex(/^\d{10}$/).message('Mobile must be a 10-digit Indian number'),
+        wa_id: Joi.string().regex(/^\d{10}$/).message('wa_id must be a 10-digit Indian number'),
         email: Joi.string().email().lowercase().trim().allow('', null),
         dob: Joi.date().iso().max('now').message('DOB must be a valid past date in ISO format').allow(null),
         gender: Joi.string().valid('Male', 'Female', 'Other').allow(null),

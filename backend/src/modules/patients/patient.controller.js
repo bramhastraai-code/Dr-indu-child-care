@@ -36,21 +36,22 @@ exports.registerPatient = async (req, res) => {
         const {
             child_name,
             parent_name,
-            mobile,
+            wa_id,
+            mobile,  // fallback
             email,
             dob,
             gender,
             address,
-            registration_source,
-            wa_id
+            registration_source
         } = req.body || {};
 
-        const final_mobile = normalizePhone(mobile);
-        const mobile_hash = hashField(final_mobile);
+        const raw_wa_id = wa_id || mobile;
+        const final_wa_id = normalizeWaId(raw_wa_id);
+        const wa_hash = hashField(normalizePhone(raw_wa_id));
 
-        // Check duplicate by mobile_hash AND child_name (siblings share mobile but have different names)
+        // Check duplicate by wa_hash AND child_name (siblings share wa_id but have different names)
         const existing = await Patient.findOne({
-            mobile_hash,
+            wa_hash,
             child_name: { $regex: new RegExp(`^${child_name}$`, 'i') },
             is_deleted: false
         });
@@ -67,10 +68,10 @@ exports.registerPatient = async (req, res) => {
 
         const patient = await Patient.create({
             patient_id,
-            wa_id: wa_id || final_mobile,
+            wa_id: final_wa_id,
             child_name,
             parent_name,
-            mobile: final_mobile,
+            wa_hash,
             gender: gender || null,
             dob: dob ? new Date(dob) : null,
             email: email || null,
@@ -83,7 +84,7 @@ exports.registerPatient = async (req, res) => {
 
         // Link patient_id to active bot session if applicable
         await BotSession.updateMany(
-            { wa_id: final_mobile, is_active: true },
+            { wa_id: final_wa_id, is_active: true },
             { $set: { patient_id } }
         );
 
@@ -124,11 +125,12 @@ exports.registerFromForm = async (req, res) => {
 // @desc    Lookup patient by mobile
 exports.getPatientByMobile = async (req, res) => {
     try {
-        const mobile = normalizePhone(req.params.mobile);
-        const mobile_hash = hashField(mobile);
+        const raw = req.params.mobile || req.params.wa_id;
+        const normalized = normalizeWaId(raw);
+        const wa_hash = hashField(normalizePhone(raw));
 
         const patient = await Patient.findOne({
-            $or: [{ mobile_hash }, { wa_id: req.params.mobile }],
+            $or: [{ wa_hash }, { wa_id: normalized }],
             is_deleted: false
         });
 
@@ -199,7 +201,7 @@ exports.getPatients = async (req, res) => {
                 { child_name: regex },
                 { parent_name: regex },
                 { patient_id: regex },
-                { mobile_hash: searchHash }
+                { wa_hash: searchHash }
             ];
         }
 

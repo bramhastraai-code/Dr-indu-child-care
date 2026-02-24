@@ -31,9 +31,9 @@ const Joi = require('joi');
  */
 
 // All routes are now public for external integrations like n8n
-router.post('/form', validate(create.keys({ mobile: Joi.string().regex(/^\d{10}$/).required(), patient_id: Joi.optional() })), bookByForm);
-router.get('/by-mobile/:mobile', getAppointmentsByMobile);
+router.post('/form', validate(create.keys({ wa_id: Joi.string().regex(/^\d{10}$/).required(), patient_id: Joi.optional(), mobile: Joi.optional() })), bookByForm);
 router.get('/by-wa/:wa_id', getAppointmentsByWaId);
+router.get('/by-mobile/:wa_id', getAppointmentsByWaId); // Alias
 router.post('/whatsapp', validate(bookWhatsapp), bookByWhatsapp);
 router.get('/reminders/pending-24h', getPending24hReminders);
 router.patch('/reminders/:appointment_id/mark-sent', markReminderSent);
@@ -71,6 +71,43 @@ router.get('/', getAppointments);
  *   post:
  *     summary: Book a new appointment (all channels)
  *     tags: [Appointments]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - patient_id
+ *               - doctor_name
+ *               - visit_type
+ *               - appointment_date
+ *               - slot_id
+ *             properties:
+ *               patient_id:
+ *                 type: string
+ *               doctor_id:
+ *                 type: string
+ *               doctor_name:
+ *                 type: string
+ *               doctor_speciality:
+ *                 type: string
+ *               visit_type:
+ *                 type: string
+ *                 enum: [VACCINATION, CONSULTATION, PULMONARY, FOLLOWUP]
+ *               appointment_date:
+ *                 type: string
+ *                 format: date
+ *               slot_id:
+ *                 type: string
+ *               appointment_mode:
+ *                 type: string
+ *                 enum: [ONLINE, OFFLINE]
+ *               reason:
+ *                 type: string
+ *               booking_source:
+ *                 type: string
+ *                 enum: [dashboard, whatsapp, form, api]
  */
 router.post('/', validate(create), createAppointment);
 

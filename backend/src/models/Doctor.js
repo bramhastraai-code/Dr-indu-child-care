@@ -20,10 +20,9 @@ const DoctorSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
-    type: {
+    speciality: {
         type: String,
-        enum: ['PULMONARY', 'NON_PULMONARY', 'VACCINATION', 'ANY'],
-        required: true
+        trim: true
     },
     is_active: {
         type: Boolean,
@@ -47,9 +46,8 @@ const DoctorSchema = new mongoose.Schema({
 });
 
 // Update updated_at on save
-DoctorSchema.pre('save', function (next) {
+DoctorSchema.pre('save', async function () {
     this.updated_at = Date.now();
-    next();
 });
 
 module.exports = mongoose.model('Doctor', DoctorSchema);

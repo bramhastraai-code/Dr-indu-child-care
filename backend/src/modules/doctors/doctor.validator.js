@@ -4,7 +4,7 @@ const createDoctor = Joi.object({
     name: Joi.string().required().trim(),
     qualification: Joi.string().allow('', null).trim(),
     experience: Joi.string().allow('', null).trim(),
-    type: Joi.string().valid('PULMONARY', 'NON_PULMONARY', 'VACCINATION', 'ANY').required(),
+    speciality: Joi.string().allow('', null).trim(),
     is_active: Joi.boolean().default(true),
     available_slots: Joi.object().pattern(
         Joi.string().regex(/^[0-6]$/), // 0-6 for days of week
@@ -16,7 +16,7 @@ const updateDoctor = Joi.object({
     name: Joi.string().trim(),
     qualification: Joi.string().allow('', null).trim(),
     experience: Joi.string().allow('', null).trim(),
-    type: Joi.string().valid('PULMONARY', 'NON_PULMONARY', 'VACCINATION', 'ANY'),
+    speciality: Joi.string().allow('', null).trim(),
     is_active: Joi.boolean(),
     available_slots: Joi.object().pattern(
         Joi.string().regex(/^[0-6]$/),

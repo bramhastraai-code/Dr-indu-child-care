@@ -115,7 +115,7 @@ const spec = {
                 parameters: [
                     queryParam('page', '1'),
                     queryParam('limit', '50'),
-                    queryParam('search', '', 'Name, mobile, or ID')
+                    queryParam('search', '', 'Name, wa_id, or ID')
                 ],
                 responses: { 200: { description: 'Success' } }
             },
@@ -123,7 +123,7 @@ const spec = {
                 tags: ['Patients'], summary: 'Register a new patient (General)',
                 requestBody: body({
                     child_name: 'Arjun Sharma', parent_name: 'Rohit Sharma',
-                    mobile: '9876543210', dob: '2022-01-01', gender: 'Male'
+                    wa_id: '9876543210', dob: '2022-01-01', gender: 'Male'
                 }),
                 responses: { 201: { description: 'Registered' } }
             }
@@ -133,7 +133,7 @@ const spec = {
                 tags: ['Patients'], summary: 'Register patient via Online Form',
                 requestBody: body({
                     child_name: 'Arjun Sharma', parent_name: 'Rohit Sharma',
-                    mobile: '9876543210', dob: '2022-01-01', gender: 'Male'
+                    wa_id: '9876543210', dob: '2022-01-01', gender: 'Male'
                 }),
                 responses: { 201: { description: 'Registered via form' } }
             }
@@ -143,7 +143,7 @@ const spec = {
                 tags: ['WhatsApp Bot Integration'], summary: 'Register patient via WhatsApp Bot',
                 requestBody: body({
                     child_name: 'Arjun Sharma', parent_name: 'Rohit Sharma',
-                    mobile: '9876543210', dob: '2022-01-01', gender: 'Male'
+                    wa_id: '9876543210', dob: '2022-01-01', gender: 'Male'
                 }),
                 responses: { 201: { description: 'Registered via bot' } }
             }
@@ -161,10 +161,10 @@ const spec = {
                 responses: { 200: { description: 'Updated' } }
             }
         },
-        '/api/patients/by-mobile/{mobile}': {
+        '/api/patients/by-wa/{wa_id}': {
             get: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Lookup patient by mobile number',
-                parameters: [pathParam('mobile', '9876543210')],
+                tags: ['WhatsApp Bot Integration'], summary: 'Lookup patient by WhatsApp ID / Number',
+                parameters: [pathParam('wa_id', '9876543210')],
                 responses: { 200: { description: 'Success' } }
             }
         },
@@ -183,18 +183,20 @@ const spec = {
             post: {
                 tags: ['Appointments'], summary: 'Book appointment (Dashboard / Admin)',
                 requestBody: body({
-                    patient_id: 'DICC-2026-0001', doctor_id: 'DOC-00001',
-                    appointment_date: '2026-06-15', slot_id: 'S1', doctor_type: 'CONSULTATION'
+                    patient_id: 'DICC-2026-0001', doctor_name: 'Dr. Indu',
+                    appointment_date: '2026-06-15', slot_id: 'S1',
+                    doctor_speciality: 'Pediatrics', visit_type: 'CONSULTATION'
                 }),
                 responses: { 201: { description: 'Booked' } }
             }
         },
         '/api/appointments/form': {
             post: {
-                tags: ['Appointments'], summary: 'Book via public web form (mobile)',
+                tags: ['Appointments'], summary: 'Book via public web form (wa_id)',
                 requestBody: body({
-                    mobile: '9876543210', doctor_id: 'DOC-00001',
-                    appointment_date: '2026-06-15', slot_id: 'S1', doctor_type: 'CONSULTATION'
+                    wa_id: '9876543210', doctor_name: 'Dr. Indu',
+                    appointment_date: '2026-06-15', slot_id: 'S1',
+                    doctor_speciality: 'Pediatrics', visit_type: 'CONSULTATION'
                 }),
                 responses: { 201: { description: 'Booked' } }
             }
@@ -203,8 +205,9 @@ const spec = {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Book via WhatsApp bot (wa_id)',
                 requestBody: body({
-                    wa_id: '9876543210', doctor_id: 'DOC-00001',
-                    appointment_date: '2026-06-15', slot_id: 'S1', doctor_type: 'CONSULTATION'
+                    wa_id: '9876543210', doctor_name: 'Dr. Indu',
+                    appointment_date: '2026-06-15', slot_id: 'S1',
+                    doctor_speciality: 'Pediatrics', visit_type: 'CONSULTATION'
                 }),
                 responses: { 201: { description: 'Booked' } }
             }
@@ -225,7 +228,13 @@ const spec = {
             patch: {
                 tags: ['Appointments'], summary: 'Update / reschedule appointment',
                 parameters: [pathParam('appointment_id', 'APT-2026-00001')],
-                requestBody: body({ appointment_date: '2026-06-20', slot_id: 'S2' }, false),
+                requestBody: body({
+                    appointment_date: '2026-06-20',
+                    slot_id: 'S2',
+                    doctor_name: 'Dr. Indu',
+                    visit_type: 'FOLLOWUP',
+                    reason: 'Follow-up consultation'
+                }, false),
                 responses: { 200: { description: 'Updated' } }
             }
         },
@@ -235,13 +244,6 @@ const spec = {
                 parameters: [pathParam('appointment_id', 'APT-2026-00001')],
                 requestBody: body({ cancellation_reason: 'Patient changed mind' }, false),
                 responses: { 200: { description: 'Cancelled' } }
-            }
-        },
-        '/api/appointments/by-mobile/{mobile}': {
-            get: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Get upcoming appointments by mobile number',
-                parameters: [pathParam('mobile', '9876543210')],
-                responses: { 200: { description: 'Success' } }
             }
         },
         '/api/appointments/by-wa/{wa_id}': {
@@ -273,7 +275,7 @@ const spec = {
             },
             post: {
                 tags: ['Doctors'], summary: 'Create a new doctor profile',
-                requestBody: body({ name: 'Dr. Indu', registration_number: 'REG123', specializations: ['Pediatrics'] }),
+                requestBody: body({ name: 'Dr. Indu', registration_number: 'REG123', speciality: 'Pediatrics' }),
                 responses: { 201: { description: 'Created' } }
             }
         },
@@ -301,7 +303,7 @@ const spec = {
             get: {
                 tags: ['Slots'], summary: 'Get available slots',
                 parameters: [
-                    queryParam('doctor_type', 'CONSULTATION', ['CONSULTATION', 'VACCINATION'], true),
+                    queryParam('doctor_name', 'Dr. Indu', null, true),
                     queryParam('date', '2026-06-15', null, true),
                     queryParam('doctor_id', 'DOC-00001')
                 ],
@@ -362,7 +364,16 @@ const spec = {
         '/api/bot/session/update': {
             patch: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Update bot session state/data',
-                requestBody: body({ wa_id: '9876543210', current_state: 'WELCOME' }, false),
+                requestBody: body({
+                    wa_id: '9876543210',
+                    current_state: 'S30_BOOKING_PREVIEW',
+                    session_data: {
+                        doctor_name: 'Dr. Indu',
+                        doctor_speciality: 'Pediatrics',
+                        appointment_date: '2026-06-15',
+                        slot_id: 'S1'
+                    }
+                }, false),
                 responses: { 200: { description: 'Updated' } }
             }
         },

@@ -38,8 +38,7 @@ const SlotSchema = new mongoose.Schema({
         type: [Number],
         default: [0, 1, 2, 3, 4, 5, 6]  // All days by default
     },
-    // Per-doctor-type override: { PULMONARY: [1,2,3,4,5,6], VACCINATION: [0,6] }
-    // If empty for a doctor_type, falls back to days_of_week
+    // Per-doctor name override: { "Dr. Smith": [1,2,3,4,5,6], "Dr. Indu": [0,6] }
     days_by_doctor: {
         type: Map,
         of: [Number],
