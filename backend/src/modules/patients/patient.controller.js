@@ -43,7 +43,7 @@ exports.registerPatient = async (req, res) => {
             address,
             registration_source,
             wa_id
-        } = req.body;
+        } = req.body || {};
 
         const final_mobile = normalizePhone(mobile);
         const mobile_hash = hashField(final_mobile);
@@ -224,7 +224,7 @@ exports.getPatients = async (req, res) => {
 exports.updatePatient = async (req, res) => {
     try {
         const { patient_id } = req.params;
-        const updates = req.body;
+        const updates = req.body || {};
         const actor = req.user ? req.user.username : 'ADMIN';
 
         delete updates.patient_id;

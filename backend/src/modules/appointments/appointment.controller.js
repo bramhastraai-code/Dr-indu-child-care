@@ -98,7 +98,7 @@ exports.createAppointment = async (req, res) => {
             gender,
             appointment_mode,
             booking_source = 'dashboard'
-        } = req.body;
+        } = req.body || {};
 
         // Validate booking_source
         const validSources = ['dashboard', 'whatsapp', 'form', 'api'];
@@ -343,7 +343,7 @@ exports.getAppointmentById = async (req, res) => {
 exports.updateAppointment = async (req, res) => {
     try {
         const { appointment_id } = req.params;
-        const { appointment_date, slot_id, doctor_type, visit_type, appointment_mode, reason } = req.body;
+        const { appointment_date, slot_id, doctor_type, visit_type, appointment_mode, reason } = req.body || {};
 
         const appt = await Appointment.findOne({ appointment_id });
         if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
@@ -413,7 +413,7 @@ exports.updateAppointment = async (req, res) => {
 exports.cancelAppointment = async (req, res) => {
     try {
         const { appointment_id } = req.params;
-        const { cancellation_reason, cancelled_by = 'dashboard' } = req.body;
+        const { cancellation_reason, cancelled_by = 'dashboard' } = req.body || {};
 
         const validCancelledBy = ['whatsapp', 'dashboard', 'system'];
         const canceller = validCancelledBy.includes(cancelled_by) ? cancelled_by : 'dashboard';
@@ -517,7 +517,7 @@ exports.bookByWhatsapp = async (req, res) => {
             appointment_date,
             slot_id,
             reason
-        } = req.body;
+        } = req.body || {};
 
         if (!rawWaId || !appointment_date || !slot_id || !doctor_type) {
             return res.status(400).json({
@@ -660,7 +660,7 @@ exports.bookByForm = async (req, res) => {
             appointment_date,
             slot_id,
             reason
-        } = req.body;
+        } = req.body || {};
 
         if (!mobile || !appointment_date || !slot_id || !doctor_type) {
             return res.status(400).json({

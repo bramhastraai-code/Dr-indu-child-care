@@ -6,7 +6,7 @@ const { normalizeWaId } = require('../../utils/helpers');
 // @access  Public (Internal/n8n)
 exports.sendWhatsApp = async (req, res) => {
     try {
-        const { to, template_name, template_params, wa_id, template, variables } = req.body;
+        const { to, template_name, template_params, wa_id, template, variables } = req.body || {};
 
         // Support both naming conventions for flexibility
         const target = normalizeWaId(to || wa_id);

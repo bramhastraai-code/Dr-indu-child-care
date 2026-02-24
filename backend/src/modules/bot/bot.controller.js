@@ -8,7 +8,7 @@ const { normalizeWaId, normalizePhone } = require('../../utils/helpers');
 const { hashField } = require('../../utils/encryption');
 
 // Helper: normalise wa_id — accept wa_id or wa_number in body
-const getWaId = (body) => normalizeWaId(body.wa_id || body.wa_number);
+const getWaId = (body) => body ? normalizeWaId(body.wa_id || body.wa_number) : null;
 
 // Helper: resolve patient by wa_id/mobile with normalized + hash lookup
 const findPatientByWa = async (waId) => {
@@ -50,7 +50,7 @@ exports.getSession = async (req, res) => {
 exports.createSession = async (req, res) => {
     try {
         const wa_id = getWaId(req.body);
-        const { session_id, source } = req.body;
+        const { session_id, source } = req.body || {};
         if (!wa_id) return res.status(400).json({ success: false, message: 'wa_id is required' });
 
         // Close others
@@ -84,7 +84,7 @@ exports.createSession = async (req, res) => {
 exports.updateSession = async (req, res) => {
     try {
         const wa_id = getWaId(req.body);
-        const { current_state, session_data, retry_count, patient_id } = req.body;
+        const { current_state, session_data, retry_count, patient_id } = req.body || {};
         if (!wa_id) return res.status(400).json({ success: false, message: 'wa_id is required' });
 
         const session = await BotSession.findOneAndUpdate(
@@ -114,7 +114,7 @@ exports.updateSession = async (req, res) => {
 exports.closeSession = async (req, res) => {
     try {
         const wa_id = getWaId(req.body);
-        const { reason } = req.body;
+        const { reason } = req.body || {};
         if (!wa_id) return res.status(400).json({ success: false, message: 'wa_id is required' });
 
         const result = await BotSession.updateMany(
@@ -133,7 +133,7 @@ exports.closeSession = async (req, res) => {
 exports.escalateSession = async (req, res) => {
     try {
         const wa_id = getWaId(req.body);
-        const { reason, failed_state, retry_count, session_id } = req.body;
+        const { reason, failed_state, retry_count, session_id } = req.body || {};
 
         const session = await BotSession.findOneAndUpdate(
             { wa_id, is_active: true },
@@ -167,7 +167,7 @@ exports.escalateSession = async (req, res) => {
 // @route   POST /api/bot/message/log
 exports.logMessage = async (req, res) => {
     try {
-        const { to, wa_id, template_name, template_params, status, provider_response } = req.body;
+        const { to, wa_id, template_name, template_params, status, provider_response } = req.body || {};
         const target = normalizeWaId(to || wa_id);
         const log = await MessageLog.create({
             wa_id: target,
@@ -224,7 +224,7 @@ exports.resolveEscalation = async (req, res) => {
 // @route   POST /api/bot/chat/log
 exports.logChat = async (req, res) => {
     try {
-        const { wa_id, wa_number, user_name, message } = req.body;
+        const { wa_id, wa_number, user_name, message } = req.body || {};
         const target = normalizeWaId(wa_id || wa_number);
         if (!target || !message) {
             return res.status(400).json({ success: false, message: 'wa_id and message are required' });

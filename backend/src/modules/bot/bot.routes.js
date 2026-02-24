@@ -15,16 +15,7 @@ const {
     getChatHistory
 } = require('./bot.controller');
 
-const rateLimit = require('express-rate-limit');
 
-const botLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000,
-    max: 100, // 100 requests per hour per WA ID
-    keyGenerator: (req) => req.body.wa_id || req.body.wa_number || req.ip,
-    message: { success: false, error_code: 'BOT_RATE_LIMIT', message: 'Rate limit exceeded for this WhatsApp ID' }
-});
-
-router.use(botLimiter);
 
 // All routes are now public for external integrations like n8n
 router.get('/interactions/unregistered', getUnregisteredInteractions);

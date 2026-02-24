@@ -52,7 +52,7 @@ exports.addMRDEntry = async (req, res) => {
             vaccine_given,
             vaccine_batch,
             recorded_by
-        } = req.body;
+        } = req.body || {};
 
         if (!patient_id || !recorded_by) {
             return res.status(400).json({ success: false, message: 'patient_id and recorded_by are required' });

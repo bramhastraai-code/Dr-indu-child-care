@@ -19,14 +19,9 @@ const {
 const validate = require('../../middleware/validate');
 const { create, bookWhatsapp, update } = require('./appointment.validator');
 const Joi = require('joi');
-const rateLimit = require('express-rate-limit');
 
-const whatsappLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000,
-    max: 20,
-    keyGenerator: (req) => req.body.wa_id || req.ip,
-    message: { success: false, error_code: 'BOT_RATE_LIMIT', message: 'Rate limit exceeded for this WhatsApp ID' }
-});
+
+
 
 /**
  * @openapi
@@ -39,7 +34,7 @@ const whatsappLimiter = rateLimit({
 router.post('/form', validate(create.keys({ mobile: Joi.string().regex(/^\d{10}$/).required(), patient_id: Joi.optional() })), bookByForm);
 router.get('/by-mobile/:mobile', getAppointmentsByMobile);
 router.get('/by-wa/:wa_id', getAppointmentsByWaId);
-router.post('/whatsapp', whatsappLimiter, validate(bookWhatsapp), bookByWhatsapp);
+router.post('/whatsapp', validate(bookWhatsapp), bookByWhatsapp);
 router.get('/reminders/pending-24h', getPending24hReminders);
 router.patch('/reminders/:appointment_id/mark-sent', markReminderSent);
 
