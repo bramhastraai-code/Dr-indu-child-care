@@ -87,10 +87,19 @@ const MRDSchema = new mongoose.Schema({
         required: true
     },
     entries: [MRDEntrySchema],
-    created_at: {
-        type: Date,
-        default: Date.now
-    }
+}, {
+    timestamps: false,
+    autoIndex: false, // Disable auto-index creation to prevent buffering timeouts
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+});
+
+// Deep Connections: Virtual Population
+MRDSchema.virtual('patient', {
+    ref: 'Patient',
+    localField: 'patient_id',
+    foreignField: 'patient_id',
+    justOne: true
 });
 
 module.exports = mongoose.model('MRD', MRDSchema);

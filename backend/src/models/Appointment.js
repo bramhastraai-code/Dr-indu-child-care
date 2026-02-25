@@ -98,7 +98,27 @@ const AppointmentSchema = new mongoose.Schema({
     created_at: { type: Date, default: Date.now },
     last_updated_at: { type: Date, default: Date.now },
     last_updated_by: { type: String, default: null }
-}, { timestamps: false });
+}, {
+    timestamps: false,
+    autoIndex: false, // Disable auto-index creation to prevent buffering timeouts
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+});
+
+// Deep Connections: Virtual Population
+AppointmentSchema.virtual('patient', {
+    ref: 'Patient',
+    localField: 'patient_id',
+    foreignField: 'patient_id',
+    justOne: true
+});
+
+AppointmentSchema.virtual('mrd_entry', {
+    ref: 'MRD',
+    localField: 'appointment_id',
+    foreignField: 'entries.appointment_id',
+    justOne: true
+});
 
 // Compound index for the one-appointment-per-patient-per-day rule
 AppointmentSchema.index({ patient_id: 1, appointment_date: 1 });

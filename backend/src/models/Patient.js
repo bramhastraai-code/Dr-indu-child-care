@@ -347,4 +347,18 @@ PatientSchema.virtual('full_name').get(function () {
   return this.child_name || null;
 });
 
+// Deep Connections: Virtual Population
+PatientSchema.virtual('appointments', {
+  ref: 'Appointment',
+  localField: 'patient_id',
+  foreignField: 'patient_id'
+});
+
+PatientSchema.virtual('mrd', {
+  ref: 'MRD',
+  localField: 'patient_id',
+  foreignField: 'patient_id',
+  justOne: true
+});
+
 module.exports = mongoose.model('Patient', PatientSchema);
