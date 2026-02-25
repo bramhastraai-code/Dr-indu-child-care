@@ -255,7 +255,7 @@ exports.getPatientByMobile = async (req, res) => {
         const wa_hash = hashField(normalizePhone(raw));
 
         const patient = await Patient.findOne({
-            $or: [{ wa_hash }, { wa_id: normalized }],
+            wa_hash,
             is_deleted: false
         });
 
@@ -312,12 +312,16 @@ exports.getPatientById = async (req, res) => {
 // @desc    Get all patients
 exports.getPatients = async (req, res) => {
     try {
-        let { page = 1, limit = 20, search, source, status } = req.query;
+        let { page = 1, limit = 20, search, source, status, gender, city, doctor } = req.query;
         page = parseInt(page, 10);
         limit = parseInt(limit, 10);
         const skip = (page - 1) * limit;
 
         const query = { is_deleted: false };
+
+        if (gender) query.gender = gender;
+        if (city) query.city = new RegExp(city, 'i');
+        if (doctor) query.doctor = new RegExp(doctor, 'i');
 
         if (search) {
             const searchHash = hashField(normalizePhone(search));

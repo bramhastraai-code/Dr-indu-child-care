@@ -17,12 +17,7 @@ const findPatientByWa = async (waId) => {
     const mobileHash = hashField(mobile);
 
     return Patient.findOne({
-        $or: [
-            { wa_hash: mobileHash },
-            { wa_id: waId },
-            { wa_id: normalized },
-            { wa_id: mobile }
-        ],
+        wa_hash: mobileHash,
         is_deleted: false
     });
 };

@@ -52,7 +52,7 @@ const enrichAppointment = async (a) => {
     ]);
     return {
         ...a.toObject(),
-        child_name: patient?.child_name || null,
+        child_name: patient?.full_name || patient?.child_name || null,
         parent_name: patient?.parent_name || null,
         // Keep `parent_mobile` for backward compatibility in API responses.
         parent_wa_id: patient?.wa_id || null,
@@ -146,10 +146,7 @@ exports.createAppointment = async (req, res) => {
             const normalized = normalizeWaId(lookupValue);
             const wa_hash = hashField(normalizePhone(lookupValue));
             patient = await Patient.findOne({
-                $or: [
-                    { wa_hash },
-                    { wa_id: normalized }
-                ],
+                wa_hash,
                 is_deleted: false
             });
         }
@@ -373,10 +370,7 @@ exports.getAppointmentsByMobile = async (req, res) => {
         const wa_hash = hashField(normalizePhone(raw));
 
         const patient = await Patient.findOne({
-            $or: [
-                { wa_hash },
-                { wa_id: normalized }
-            ],
+            wa_hash,
             is_deleted: false
         });
         if (!patient) return res.status(404).json({ success: false, message: `No patient found for ${raw}` });
@@ -602,10 +596,7 @@ exports.getAppointmentsByWaId = async (req, res) => {
         const wa_hash = hashField(normalizePhone(extractMobile(rawWaId)));
 
         const patient = await Patient.findOne({
-            $or: [
-                { wa_hash },
-                { wa_id: normalized }
-            ],
+            wa_hash,
             is_deleted: false
         });
         if (!patient) {
@@ -664,10 +655,7 @@ exports.bookByWhatsapp = async (req, res) => {
 
         // Step 3: Check patient exists
         const patient = await Patient.findOne({
-            $or: [
-                { wa_id: normalized },
-                { wa_hash }
-            ],
+            wa_hash,
             is_deleted: false
         });
 
@@ -824,10 +812,7 @@ exports.bookByForm = async (req, res) => {
 
         // Lookup patient
         const patient = await Patient.findOne({
-            $or: [
-                { wa_hash },
-                { wa_id: normalized }
-            ],
+            wa_hash,
             is_deleted: false
         });
 

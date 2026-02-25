@@ -117,7 +117,10 @@ const spec = {
                     queryParam('limit', '50'),
                     queryParam('search', '', 'Name, wa_id, or ID'),
                     queryParam('source', '', ['whatsapp', 'form', 'dashboard', 'api']),
-                    queryParam('status', '', ['PENDING', 'COMPLETE'])
+                    queryParam('status', '', ['PENDING', 'COMPLETE']),
+                    queryParam('gender', '', ['Male', 'Female', 'Other']),
+                    queryParam('city', ''),
+                    queryParam('doctor', '')
                 ],
                 responses: { 200: { description: 'Success' } }
             },
@@ -125,17 +128,15 @@ const spec = {
                 tags: ['Patients'], summary: 'Register a new patient (General)',
                 requestBody: body({
                     salutation: 'Master',
-                    first_name: 'Arjun',
-                    middle_name: 'Rohit',
-                    last_name: 'Sharma',
-                    gender: 'Male',
-                    dob: '2022-01-01',
-                    wa_id: '9876543210',
-                    father_name: 'Rohit Sharma',
-                    father_mobile: '9876543210',
-                    mother_name: 'Anjali Sharma',
-                    city: 'Mumbai',
-                    enrollment_option: 'just_enroll'
+                    first_name: 'Arjun', middle_name: 'Rohit', last_name: 'Sharma',
+                    gender: 'Male', mothers_name: 'Anjali Sharma',
+                    dob: '2020-05-20', age_years: 3, age_months: 9,
+                    birth_time_hours: 10, birth_time_minutes: 30, birth_time_ampm: 'AM',
+                    father_name: 'Rohit Sharma', father_mobile: '9876543210', father_occupation: 'Engineer',
+                    mother_name: 'Anjali Sharma', mother_mobile: '9876543211',
+                    area: 'Bandra', city: 'Mumbai', pin_code: '400050',
+                    wa_id: '9876543210', email: 'parent@example.com',
+                    doctor: 'Dr. Indu', enrollment_option: 'just_enroll'
                 }),
                 responses: { 201: { description: 'Registered' } }
             }
@@ -144,16 +145,10 @@ const spec = {
             post: {
                 tags: ['Patients'], summary: 'Register patient via Online Form',
                 requestBody: body({
-                    salutation: 'Miss',
-                    first_name: 'Sia',
-                    last_name: 'Patel',
-                    gender: 'Female',
-                    dob_unknown: false,
-                    dob: '2023-05-15',
-                    wa_id: '9123456789',
-                    father_name: 'Amit Patel',
-                    mother_name: 'Meena Patel',
-                    registration_source: 'form'
+                    salutation: 'Miss', first_name: 'Sia', last_name: 'Patel',
+                    gender: 'Female', dob_unknown: false, dob: '2023-05-15',
+                    wa_id: '9123456789', father_name: 'Amit Patel', mother_name: 'Meena Patel',
+                    area: 'Colaba', city: 'Mumbai', registration_source: 'form'
                 }),
                 responses: { 201: { description: 'Registered via form' } }
             }
@@ -162,14 +157,14 @@ const spec = {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Register patient via WhatsApp Bot',
                 requestBody: body({
-                    child_name: 'Arjun Sharma',
-                    parent_name: 'Rohit Sharma',
-                    wa_id: '9876543210',
-                    dob: '2022-01-01',
-                    gender: 'Male',
-                    registration_source: 'whatsapp'
+                    salutation: 'Master', first_name: 'Arjun', last_name: 'Sharma',
+                    gender: 'Male', dob: '2022-01-01', wa_id: '9876543210',
+                    father_name: 'Rohit Sharma', registration_source: 'whatsapp'
                 }),
-                responses: { 201: { description: 'Registered via bot' } }
+                responses: {
+                    201: { description: 'Registered via bot' },
+                    409: { description: 'Patient already exists with this mobile' }
+                }
             }
         },
         '/api/patients/{patient_id}': {
@@ -182,8 +177,12 @@ const spec = {
                 tags: ['Patients'], summary: 'Update patient details',
                 parameters: [pathParam('patient_id', 'DICC-2026-0001')],
                 requestBody: body({
+                    salutation: 'Master',
                     first_name: 'Arjun',
                     last_name: 'R. Sharma',
+                    father_name: 'Rohit Sharma',
+                    mother_name: 'Anjali Sharma',
+                    dob: '2020-05-20',
                     area: 'Bandra',
                     city: 'Mumbai',
                     is_active: true
