@@ -34,22 +34,77 @@ const generatePatientId = async () => {
 exports.registerPatient = async (req, res) => {
     try {
         const {
+            // Core
             child_name,
             parent_name,
             wa_id,
-            mobile,  // fallback
-            email,
-            dob,
+            mobile,                     // fallback alias
+            registration_source,
+
+            // Section 1 – Personal
+            salutation,
+            first_name,
+            middle_name,
+            last_name,
             gender,
+            mothers_name,
+            dob_unknown,
+            dob,
+            age_years,
+            age_months,
+            age_days,
+            birth_time_hours,
+            birth_time_minutes,
+            birth_time_ampm,
+
+            // Section 2 – Photo & ID
+            registration_date,
+            photo,
+
+            // Section 3 – Parent / Guardian
+            father_name,
+            father_mobile,
+            father_email,
+            father_occupation,
+            mother_name,
+            mother_mobile,
+            mother_email,
+            mother_occupation,
+            communication_preference,
+
+            // Section 4 – Contact
+            email,
+            area,
+            city,
+            state,
+            country,
+            pin_code,
+            phone_residence,
             address,
-            registration_source
+
+            // Section 5 – Additional
+            source,
+            reference_details,
+            home_branch,
+            doctor,
+            religion,
+            language,
+            account_type,
+            rating,
+            remarks,
+
+            // Section 6 – Enrollment
+            enrollment_option,
+
+            // Section 7 – Status
+            is_active,
         } = req.body || {};
 
         const raw_wa_id = wa_id || mobile;
         const final_wa_id = normalizeWaId(raw_wa_id);
         const wa_hash = hashField(normalizePhone(raw_wa_id));
 
-        // Check duplicate by wa_hash AND child_name (siblings share wa_id but have different names)
+        // Check duplicate by wa_hash AND child_name (siblings share wa_id)
         const existing = await Patient.findOne({
             wa_hash,
             child_name: { $regex: new RegExp(`^${child_name}$`, 'i') },
@@ -69,18 +124,77 @@ exports.registerPatient = async (req, res) => {
         const patient = await Patient.create({
             patient_id,
             wa_id: final_wa_id,
-            child_name,
-            parent_name,
             wa_hash,
+
+            // Personal
+            child_name,
+            salutation: salutation || null,
+            first_name: first_name || null,
+            middle_name: middle_name || null,
+            last_name: last_name || null,
             gender: gender || null,
+            mothers_name: mothers_name || null,
+            parent_name: parent_name || null,
+
+            // Birth
+            dob_unknown: dob_unknown || false,
             dob: parseDOB(dob),
+            age_years: age_years ?? null,
+            age_months: age_months ?? null,
+            age_days: age_days ?? null,
+            birth_time_hours: birth_time_hours ?? null,
+            birth_time_minutes: birth_time_minutes ?? null,
+            birth_time_ampm: birth_time_ampm || null,
+
+            // Photo & ID
+            registration_date: registration_date ? new Date(registration_date) : new Date(),
+            photo: photo || null,
+
+            // Father
+            father_name: father_name || null,
+            father_mobile: father_mobile || null,
+            father_email: father_email || null,
+            father_occupation: father_occupation || null,
+
+            // Mother
+            mother_name: mother_name || null,
+            mother_mobile: mother_mobile || null,
+            mother_email: mother_email || null,
+            mother_occupation: mother_occupation || null,
+
+            communication_preference: communication_preference || null,
+
+            // Contact
             email: email || null,
+            area: area || null,
+            city: city || null,
+            state: state || null,
+            country: country || null,
+            pin_code: pin_code || null,
+            phone_residence: phone_residence || null,
             address: address || null,
+
+            // Additional
+            source: source || null,
+            reference_details: reference_details || null,
+            home_branch: home_branch || null,
+            doctor: doctor || null,
+            religion: religion || null,
+            language: language || null,
+            account_type: account_type || null,
+            rating: rating ?? null,
+            remarks: remarks || null,
+
+            // Enrollment & Status
+            enrollment_option: enrollment_option || 'just_enroll',
+            is_active: is_active !== undefined ? is_active : true,
+
             registration_source: (registration_source || 'dashboard').toLowerCase()
         });
 
         // Create blank MRD shell
         await MRD.create({ patient_id, entries: [] });
+
         // Link patient_id to active bot session if applicable
         await BotSession.updateMany(
             { wa_id: final_wa_id, is_active: true },
@@ -90,7 +204,6 @@ exports.registerPatient = async (req, res) => {
         const actor = req.user ? req.user.username : 'SYSTEM';
         const actor_role = req.user ? req.user.role : 'bot_service';
 
-        // Audit log
         await audit({
             event_type: 'PATIENT_REGISTERED',
             entity_type: 'patient',
@@ -198,7 +311,11 @@ exports.getPatients = async (req, res) => {
             const regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
             query.$or = [
                 { child_name: regex },
+                { first_name: regex },
+                { last_name: regex },
                 { parent_name: regex },
+                { father_name: regex },
+                { mother_name: regex },
                 { patient_id: regex },
                 { wa_hash: searchHash }
             ];
@@ -234,9 +351,14 @@ exports.updatePatient = async (req, res) => {
         const updates = req.body || {};
         const actor = req.user ? req.user.username : 'ADMIN';
 
+        // Protect immutable fields
         delete updates.patient_id;
         delete updates.registered_at;
         delete updates._id;
+        delete updates.wa_hash;
+
+        updates.last_updated_at = new Date();
+        updates.last_updated_by = actor;
 
         const patient = await Patient.findOneAndUpdate(
             { patient_id, is_deleted: false },

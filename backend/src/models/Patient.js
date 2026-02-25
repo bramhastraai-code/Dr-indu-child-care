@@ -2,12 +2,15 @@ const mongoose = require('mongoose');
 const { encrypt, decrypt, maskData, hashField } = require('../utils/encryption');
 
 const PatientSchema = new mongoose.Schema({
+  // ── Core / System ────────────────────────────────────────────
   patient_id: {
     type: String,
     unique: true,
     required: true,
     index: true
   },
+
+  // WhatsApp / primary contact phone (encrypted)
   wa_id: {
     type: String,
     required: true,
@@ -19,16 +22,192 @@ const PatientSchema = new mongoose.Schema({
     type: String,
     index: true
   },
+
+  // ── Section 1: Personal Information ──────────────────────────
+  salutation: {
+    type: String,
+    enum: ['Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Master', 'Miss', null],
+    default: null
+  },
+  first_name: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  middle_name: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  last_name: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  // Backward-compat combined name (child full name)
   child_name: {
     type: String,
     required: true,
     trim: true
   },
+  gender: {
+    type: String,
+    enum: ['Male', 'Female', 'Other'],
+    default: null
+  },
+  mothers_name: {
+    type: String,
+    trim: true,
+    default: null
+  },
+
+  // Birth Details
+  dob_unknown: {
+    type: Boolean,
+    default: false
+  },
+  dob: {
+    type: Date,
+    default: null
+  },
+  // Computed/stored age (for cases where DOB is unknown)
+  age_years: {
+    type: Number,
+    default: null
+  },
+  age_months: {
+    type: Number,
+    default: null
+  },
+  age_days: {
+    type: Number,
+    default: null
+  },
+  birth_time_hours: {
+    type: Number,
+    min: 1,
+    max: 12,
+    default: null
+  },
+  birth_time_minutes: {
+    type: Number,
+    min: 0,
+    max: 59,
+    default: null
+  },
+  birth_time_ampm: {
+    type: String,
+    enum: ['AM', 'PM', null],
+    default: null
+  },
+
+  // ── Section 2: Photograph & Patient ID ───────────────────────
+  registration_date: {
+    type: Date,
+    default: Date.now
+  },
+  photo: {
+    type: String,   // Base64 encoded string or URL
+    default: null
+  },
+
+  // ── Section 3: Parent / Guardian Information ─────────────────
+  // Father
+  father_name: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  father_mobile: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  father_email: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    default: null
+  },
+  father_occupation: {
+    type: String,
+    trim: true,
+    default: null
+  },
+
+  // Mother
+  mother_name: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  mother_mobile: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  mother_email: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    default: null
+  },
+  mother_occupation: {
+    type: String,
+    trim: true,
+    default: null
+  },
+
+  // Legacy parent_name kept for backward-compat
   parent_name: {
     type: String,
-    required: true,
-    trim: true
+    trim: true,
+    default: null
   },
+
+  communication_preference: {
+    type: String,
+    enum: ['Father', 'Mother', 'Both', 'WhatsApp', 'Email', 'SMS', null],
+    default: null
+  },
+
+  // ── Section 4: Contact Information ───────────────────────────
+  area: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  city: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  state: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  country: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  pin_code: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  phone_residence: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  // Kept for backward-compat
+  address: {
+    type: String,
+    default: null
+  },
+  // Encrypted primary email (for portal login / comms)
   email: {
     type: String,
     trim: true,
@@ -41,19 +220,69 @@ const PatientSchema = new mongoose.Schema({
     type: String,
     index: true
   },
-  gender: {
+
+  // ── Section 5: Additional Details ────────────────────────────
+  source: {
     type: String,
-    enum: ['Male', 'Female', 'Other'],
+    trim: true,
     default: null
   },
-  dob: {
-    type: Date,
-    default: null
-  },
-  address: {
+  reference_details: {
     type: String,
+    trim: true,
     default: null
   },
+  home_branch: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  doctor: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  religion: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  language: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  account_type: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  rating: {
+    type: Number,
+    min: 1,
+    max: 5,
+    default: null
+  },
+  remarks: {
+    type: String,
+    trim: true,
+    default: null
+  },
+
+  // ── Section 6: Enrollment Options ────────────────────────────
+  enrollment_option: {
+    type: String,
+    enum: ['just_enroll', 'send_to_specific', null],
+    default: 'just_enroll'
+  },
+
+  // ── Section 7: Status ─────────────────────────────────────────
+  is_active: {
+    type: Boolean,
+    default: true
+  },
+
+  // ── System ────────────────────────────────────────────────────
   registration_status: {
     type: String,
     enum: ['PENDING', 'COMPLETE'],
@@ -83,11 +312,12 @@ const PatientSchema = new mongoose.Schema({
   }
 }, {
   timestamps: false,
+  autoIndex: false, // Disable auto-index creation to prevent buffering timeouts
   toJSON: { getters: true, virtuals: true },
   toObject: { getters: true, virtuals: true }
 });
 
-// Middleware to update hashes
+// ── Middleware ─────────────────────────────────────────────────
 PatientSchema.pre('save', function () {
   const { normalizePhone } = require('../utils/helpers');
 
@@ -99,11 +329,22 @@ PatientSchema.pre('save', function () {
     const rawVal = decrypt(this.email);
     this.email_hash = hashField(rawVal);
   }
+
+  this.last_updated_at = new Date();
 });
 
-// Virtual for masked wa_id
+// ── Virtuals ───────────────────────────────────────────────────
 PatientSchema.virtual('wa_masked').get(function () {
   return this.wa_id ? maskData(this.wa_id) : null;
+});
+
+// Full name virtual
+PatientSchema.virtual('full_name').get(function () {
+  if (this.first_name || this.last_name) {
+    return [this.salutation, this.first_name, this.middle_name, this.last_name]
+      .filter(Boolean).join(' ');
+  }
+  return this.child_name || null;
 });
 
 module.exports = mongoose.model('Patient', PatientSchema);

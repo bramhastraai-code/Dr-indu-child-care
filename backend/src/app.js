@@ -23,7 +23,7 @@ app.use(helmet({
 }));
 
 // Body parser
-app.use(express.json({ limit: '10kb' })); // Limit body size
+app.use(express.json({ limit: '2mb' })); // Allow Base64 photo uploads
 app.use(cookieParser());
 
 // Dev logging middleware
@@ -34,10 +34,14 @@ if (process.env.NODE_ENV === 'development') {
 // Enable CORS
 app.use(corsMiddleware);
 
-// MongoDB connection
+// MongoDB connection events for debugging
+mongoose.connection.on('connected', () => console.log('Mongoose default connection open to DB'));
+mongoose.connection.on('error', (err) => console.error('Mongoose default connection error:', err));
+mongoose.connection.on('disconnected', () => console.log('Mongoose default connection disconnected'));
+
 mongoose.connect(process.env.MONGODB_URI)
-    .then(() => console.log('MongoDB Connected...'))
-    .catch(err => console.error('MongoDB Connection Error:', err));
+    .then(() => console.log('MongoDB connect() promise resolved'))
+    .catch(err => console.error('MongoDB initial connection error:', err));
 
 // Public Routes
 app.use('/api/system/health', (req, res) => res.json({ status: 'up' }));
