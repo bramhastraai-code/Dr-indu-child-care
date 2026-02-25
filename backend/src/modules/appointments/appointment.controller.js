@@ -56,6 +56,7 @@ const enrichAppointment = async (a) => {
         parent_name: patient?.parent_name || null,
         // Keep `parent_mobile` for backward compatibility in API responses.
         parent_wa_id: patient?.wa_id || null,
+        parent_mobile: patient?.wa_id || null,
         wa_id: a.wa_id || patient?.wa_id || null,
         formatted_date: a.appointment_date ? a.appointment_date.toISOString().split('T')[0] : null,
         slot_label: availability?.custom_label || slot?.slot_label || slot?.display_label || null,

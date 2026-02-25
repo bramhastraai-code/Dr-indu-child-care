@@ -100,14 +100,27 @@ exports.registerPatient = async (req, res) => {
             is_active,
         } = req.body || {};
 
-        const raw_wa_id = wa_id || mobile;
+        // 1. Resolve Child Name (Combine parts if missing)
+        let final_child_name = child_name;
+        if (!final_child_name && first_name) {
+            final_child_name = [first_name, middle_name, last_name].filter(Boolean).join(' ');
+        }
+        if (!final_child_name) {
+            return res.status(400).json({ success: false, message: 'Child name or First name is required' });
+        }
+
+        // 2. Resolve WhatsApp ID / Mobile
+        const raw_wa_id = wa_id || mobile || father_mobile || mother_mobile;
+        if (!raw_wa_id) {
+            return res.status(400).json({ success: false, message: 'At least one mobile number is required' });
+        }
         const final_wa_id = normalizeWaId(raw_wa_id);
         const wa_hash = hashField(normalizePhone(raw_wa_id));
 
         // Check duplicate by wa_hash AND child_name (siblings share wa_id)
         const existing = await Patient.findOne({
             wa_hash,
-            child_name: { $regex: new RegExp(`^${child_name}$`, 'i') },
+            child_name: { $regex: new RegExp(`^${final_child_name}$`, 'i') },
             is_deleted: false
         });
         if (existing) {
@@ -127,7 +140,7 @@ exports.registerPatient = async (req, res) => {
             wa_hash,
 
             // Personal
-            child_name,
+            child_name: final_child_name,
             salutation: salutation || null,
             first_name: first_name || null,
             middle_name: middle_name || null,

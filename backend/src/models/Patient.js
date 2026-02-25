@@ -44,11 +44,11 @@ const PatientSchema = new mongoose.Schema({
     trim: true,
     default: null
   },
-  // Backward-compat combined name (child full name)
+  // Backward-compat combined name (child full name) - now optional as it can be computed
   child_name: {
     type: String,
-    required: true,
-    trim: true
+    trim: true,
+    default: null
   },
   gender: {
     type: String,
@@ -336,6 +336,11 @@ PatientSchema.pre('save', function () {
 // ── Virtuals ───────────────────────────────────────────────────
 PatientSchema.virtual('wa_masked').get(function () {
   return this.wa_id ? maskData(this.wa_id) : null;
+});
+
+// Alias for backward-compat
+PatientSchema.virtual('parent_mobile').get(function () {
+  return this.wa_id;
 });
 
 // Full name virtual

@@ -87,8 +87,9 @@ const patientSchemas = {
     // POST /api/patients
     register: Joi.object({
         // Required
-        child_name: Joi.string().trim().min(2).max(100).required(),
-        parent_name: Joi.string().trim().min(2).max(100).allow('', null),
+        // Required (either child_name OR names must be present, handled in logic)
+        child_name: Joi.string().trim().max(100).allow('', null),
+        parent_name: Joi.string().trim().max(100).allow('', null),
         wa_id: Joi.alternatives().try(
             Joi.string().trim().min(8).max(50),
             Joi.string().allow('', null)

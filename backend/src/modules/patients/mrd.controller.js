@@ -206,10 +206,13 @@ exports.exportMRD = async (req, res) => {
             data: {
                 patient: {
                     patient_id: patient.patient_id,
-                    child_name: patient.child_name,
-                    parent_name: patient.parent_name,
-                    parent_mobile: patient.parent_mobile,
-                    dob: patient.dob
+                    child_name: patient.child_name || (patient.first_name ? [patient.first_name, patient.last_name].filter(Boolean).join(' ') : 'Unknown'),
+                    full_name: patient.full_name,
+                    parent_name: patient.parent_name || patient.father_name || patient.mother_name,
+                    mobile: patient.wa_id,
+                    parent_mobile: patient.wa_id,
+                    dob: patient.dob,
+                    age: patient.age_years ? `${patient.age_years}y ${patient.age_months}m` : null
                 },
                 mrd_entries: mrd.entries.sort((a, b) => new Date(b.visit_date) - new Date(a.visit_date)),
                 vaccination_history

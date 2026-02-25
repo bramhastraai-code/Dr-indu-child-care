@@ -115,15 +115,27 @@ const spec = {
                 parameters: [
                     queryParam('page', '1'),
                     queryParam('limit', '50'),
-                    queryParam('search', '', 'Name, wa_id, or ID')
+                    queryParam('search', '', 'Name, wa_id, or ID'),
+                    queryParam('source', '', ['whatsapp', 'form', 'dashboard', 'api']),
+                    queryParam('status', '', ['PENDING', 'COMPLETE'])
                 ],
                 responses: { 200: { description: 'Success' } }
             },
             post: {
                 tags: ['Patients'], summary: 'Register a new patient (General)',
                 requestBody: body({
-                    child_name: 'Arjun Sharma', parent_name: 'Rohit Sharma',
-                    wa_id: '9876543210', dob: '2022-01-01', gender: 'Male'
+                    salutation: 'Master',
+                    first_name: 'Arjun',
+                    middle_name: 'Rohit',
+                    last_name: 'Sharma',
+                    gender: 'Male',
+                    dob: '2022-01-01',
+                    wa_id: '9876543210',
+                    father_name: 'Rohit Sharma',
+                    father_mobile: '9876543210',
+                    mother_name: 'Anjali Sharma',
+                    city: 'Mumbai',
+                    enrollment_option: 'just_enroll'
                 }),
                 responses: { 201: { description: 'Registered' } }
             }
@@ -132,8 +144,16 @@ const spec = {
             post: {
                 tags: ['Patients'], summary: 'Register patient via Online Form',
                 requestBody: body({
-                    child_name: 'Arjun Sharma', parent_name: 'Rohit Sharma',
-                    wa_id: '9876543210', dob: '2022-01-01', gender: 'Male'
+                    salutation: 'Miss',
+                    first_name: 'Sia',
+                    last_name: 'Patel',
+                    gender: 'Female',
+                    dob_unknown: false,
+                    dob: '2023-05-15',
+                    wa_id: '9123456789',
+                    father_name: 'Amit Patel',
+                    mother_name: 'Meena Patel',
+                    registration_source: 'form'
                 }),
                 responses: { 201: { description: 'Registered via form' } }
             }
@@ -142,8 +162,12 @@ const spec = {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Register patient via WhatsApp Bot',
                 requestBody: body({
-                    child_name: 'Arjun Sharma', parent_name: 'Rohit Sharma',
-                    wa_id: '9876543210', dob: '2022-01-01', gender: 'Male'
+                    child_name: 'Arjun Sharma',
+                    parent_name: 'Rohit Sharma',
+                    wa_id: '9876543210',
+                    dob: '2022-01-01',
+                    gender: 'Male',
+                    registration_source: 'whatsapp'
                 }),
                 responses: { 201: { description: 'Registered via bot' } }
             }
@@ -157,7 +181,13 @@ const spec = {
             put: {
                 tags: ['Patients'], summary: 'Update patient details',
                 parameters: [pathParam('patient_id', 'DICC-2026-0001')],
-                requestBody: body({ child_name: 'Arjun R. Sharma' }, false),
+                requestBody: body({
+                    first_name: 'Arjun',
+                    last_name: 'R. Sharma',
+                    area: 'Bandra',
+                    city: 'Mumbai',
+                    is_active: true
+                }, false),
                 responses: { 200: { description: 'Updated' } }
             }
         },
@@ -311,15 +341,47 @@ const spec = {
             }
         },
         '/api/slots/config': {
-            get: { tags: ['Slots'], summary: 'Get slot config', responses: { 200: { description: 'Success' } } },
+            get: { tags: ['Slots'], summary: 'Get all slot templates', responses: { 200: { description: 'Success' } } },
             put: {
-                tags: ['Slots'], summary: 'Update slot config',
+                tags: ['Slots'], summary: 'Bulk update slot templates',
                 requestBody: body({
                     slots: [
-                        { slot_id: 'S1', slot_label: '10:00 AM', start_time: '10:00', end_time: '10:30', session: 'MORNING' }
+                        { slot_id: 'SLOT_1000', slot_label: '10:00 AM', start_time: '10:00', end_time: '10:30', session: 'MORNING' }
                     ]
                 }),
                 responses: { 200: { description: 'Updated' } }
+            }
+        },
+        '/api/slots/config/add': {
+            post: {
+                tags: ['Slots'], summary: 'Create a new slot template',
+                requestBody: body({
+                    slot_label: '12:00 PM',
+                    start_time: '12:00',
+                    end_time: '12:30',
+                    session: 'AFTERNOON'
+                }),
+                responses: { 201: { description: 'Created' } }
+            }
+        },
+        '/api/slots/config/{slot_id}': {
+            delete: {
+                tags: ['Slots'], summary: 'Delete a slot template',
+                parameters: [pathParam('slot_id', 'SLOT_1000')],
+                responses: { 200: { description: 'Deleted' } }
+            }
+        },
+        '/api/slots/daily-update': {
+            post: {
+                tags: ['Slots'], summary: 'Override a specific slot for a specific day/doctor',
+                requestBody: body({
+                    slot_id: 'SLOT_1000',
+                    slot_date: '2026-06-15',
+                    doctor_name: 'Dr. Indu',
+                    custom_label: 'Urgent Only',
+                    custom_start_time: '10:15'
+                }),
+                responses: { 200: { description: 'Updated for the day' } }
             }
         },
 
