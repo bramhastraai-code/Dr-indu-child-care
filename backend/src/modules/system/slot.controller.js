@@ -8,104 +8,146 @@ exports.getAvailableSlots = async (req, res) => {
     try {
         const { doctor_name, date, doctor_id } = req.query;
 
-        if (!doctor_name || !date) {
-            return res.status(400).json({ success: false, message: 'doctor_name and date are required' });
-        }
-
         const queryDate = toMidnight(date);
-        const dayOfWeek = queryDate.getUTCDay(); // 0=Sun … 6=Sat (Timezone-safe for UTC midnight)
+        const dayOfWeek = queryDate.getUTCDay();
+        const now = new Date();
+        const isToday = queryDate.getUTCFullYear() === now.getUTCFullYear() &&
+            queryDate.getUTCMonth() === now.getUTCMonth() &&
+            queryDate.getUTCDate() === now.getUTCDate();
 
-        let todayTemplates = [];
         const allTemplates = await Slot.find({ is_active: true }).sort({ start_time: 1 });
+        const Doctor = require('../../models/Doctor');
 
-        if (doctor_id) {
-            const Doctor = require('../../models/Doctor');
-            const doctor = await Doctor.findOne({ doctor_id });
-            if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+        // Case A: Specific Doctor (by ID or Name)
+        if (doctor_id || doctor_name) {
+            let targetDoctor = null;
+            if (doctor_id) {
+                targetDoctor = await Doctor.findOne({ doctor_id });
+            }
 
-            const doctorSlotIds = doctor.available_slots?.get(dayOfWeek.toString()) || [];
+            // Fallback to name if ID not found or not provided
+            if (!targetDoctor && doctor_name) {
+                targetDoctor = await Doctor.findOne({ name: doctor_name, is_active: true });
+            }
+
+            if (!targetDoctor) return res.status(404).json({ success: false, message: 'Doctor not found or inactive' });
+            if (!targetDoctor.is_active) return res.json({ success: true, message: 'Doctor is inactive', data: [] });
+
+            const actualName = targetDoctor.name;
+            const actualId = targetDoctor.doctor_id;
+
+            // Resolve which templates apply to this doctor today
+            const doctorSlotIds = targetDoctor.available_slots?.get(dayOfWeek.toString()) || [];
+            let todayTemplates = [];
             if (doctorSlotIds.length === 0) {
-                // If no specific slots for doctor on this day, fallback to doctor_name templates
                 todayTemplates = allTemplates.filter(t => {
-                    const perDoctor = t.days_by_doctor?.get(doctor_name);
+                    const safeName = actualName.replace(/\./g, '');
+                    const perDoctor = t.days_by_doctor?.get(safeName) || t.days_by_doctor?.get(actualName);
                     const activeDays = (perDoctor && perDoctor.length > 0) ? perDoctor : (t.days_of_week || [0, 1, 2, 3, 4, 5, 6]);
                     return activeDays.includes(dayOfWeek);
                 });
             } else {
                 todayTemplates = allTemplates.filter(t => doctorSlotIds.includes(t.slot_id));
             }
-        } else {
-            todayTemplates = allTemplates.filter(t => {
-                const perDoctor = t.days_by_doctor?.get(doctor_name);
-                const activeDays = (perDoctor && perDoctor.length > 0) ? perDoctor : (t.days_of_week || [0, 1, 2, 3, 4, 5, 6]);
-                return activeDays.includes(dayOfWeek);
+
+            const dailyAvailability = await SlotAvailability.find({ slot_date: queryDate, $or: [{ doctor_id: actualId }, { doctor_name: actualName }] });
+            const statusMap = new Map(dailyAvailability.map(a => [a.slot_id, a]));
+
+            const available = todayTemplates
+                .filter(t => {
+                    const status = statusMap.get(t.slot_id);
+                    if (status && (status.is_booked || status.blocked_by_admin)) return false;
+                    if (isToday) {
+                        const [h, m] = (status?.custom_start_time || t.start_time).split(':');
+                        const slotMins = parseInt(h) * 60 + parseInt(m);
+                        const clinicNow = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+                        const nowMins = clinicNow.getUTCHours() * 60 + clinicNow.getUTCMinutes();
+                        if (slotMins < nowMins - 5) return false;
+                    }
+                    return true;
+                })
+                .map(t => {
+                    const status = statusMap.get(t.slot_id);
+                    const baseLabel = status?.custom_label || t.slot_label || t.display_label;
+                    return {
+                        slot_id: t.slot_id,
+                        label: `${actualName} - ${baseLabel}`,
+                        session: t.session,
+                        start_time: status?.custom_start_time || t.start_time,
+                        end_time: status?.custom_end_time || t.end_time
+                    };
+                });
+
+            return res.json({
+                success: true,
+                date,
+                formatted_date: queryDate.toISOString().split('T')[0],
+                doctor_name: actualName,
+                doctor_id: actualId,
+                doctor_speciality: targetDoctor.speciality,
+                data: available
             });
         }
 
-        // 2. Get all slot status on this date (including booked, blocked, or custom overrides)
-        const dailyFilter = { slot_date: queryDate };
-        if (doctor_id) {
-            dailyFilter.doctor_id = doctor_id;
-        } else {
-            dailyFilter.doctor_name = doctor_name;
-        }
+        // Case B: n8n "Who is available?" mode (return for all active doctors)
+        const activeDoctors = await Doctor.find({ is_active: true });
+        const results = [];
 
-        const dailyAvailability = await SlotAvailability.find(dailyFilter);
-        const statusMap = new Map(dailyAvailability.map(a => [a.slot_id, a]));
+        for (const dr of activeDoctors) {
+            const drName = dr.name;
+            const drId = dr.doctor_id;
 
-        // 3. Filter and Enrich available slots
-        const now = new Date();
-        const isToday = queryDate.getUTCFullYear() === now.getUTCFullYear() &&
-            queryDate.getUTCMonth() === now.getUTCMonth() &&
-            queryDate.getUTCDate() === now.getUTCDate();
+            const drSlotIds = dr.available_slots?.get(dayOfWeek.toString()) || [];
+            let drTemplates = [];
+            if (drSlotIds.length === 0) {
+                drTemplates = allTemplates.filter(t => {
+                    const safeName = drName.replace(/\./g, '');
+                    const perDoctor = t.days_by_doctor?.get(safeName) || t.days_by_doctor?.get(drName);
+                    const activeDays = (perDoctor && perDoctor.length > 0) ? perDoctor : (t.days_of_week || [0, 1, 2, 3, 4, 5, 6]);
+                    return activeDays.includes(dayOfWeek);
+                });
+            } else {
+                drTemplates = allTemplates.filter(t => drSlotIds.includes(t.slot_id));
+            }
 
-        const available_slots = todayTemplates
-            .filter(t => {
-                const status = statusMap.get(t.slot_id);
-                // Filter out if booked or blocked
-                if (status && (status.is_booked || status.blocked_by_admin)) return false;
+            const daily = await SlotAvailability.find({ slot_date: queryDate, $or: [{ doctor_id: drId }, { doctor_name: drName }] });
+            const statusMap = new Map(daily.map(a => [a.slot_id, a]));
 
-                // Filter out past slots for today
-                if (isToday) {
-                    const [h, m] = (status?.custom_start_time || t.start_time).split(':');
-                    const slotTime = new Date(queryDate);
-                    // Match the hours/minutes to the slot time
-                    // NOTE: This assumes times are stored/treated relative to the date's TZ
-                    slotTime.setUTCHours(h, m, 0, 0);
-                    // If slot time is more than 5 minutes ago, hide it
-                    if (slotTime < new Date(now.getTime() - 5 * 60 * 1000)) return false;
-                }
-
-                return true;
-            })
-            .map(t => {
-                const status = statusMap.get(t.slot_id);
-                return {
+            const available = drTemplates
+                .filter(t => {
+                    const status = statusMap.get(t.slot_id);
+                    if (status && (status.is_booked || status.blocked_by_admin)) return false;
+                    if (isToday) {
+                        const [h, m] = (status?.custom_start_time || t.start_time).split(':');
+                        const slotMins = parseInt(h) * 60 + parseInt(m);
+                        const clinicNow = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+                        const nowMins = clinicNow.getUTCHours() * 60 + clinicNow.getUTCMinutes();
+                        if (slotMins < nowMins - 5) return false;
+                    }
+                    return true;
+                })
+                .map(t => ({
                     slot_id: t.slot_id,
-                    label: status?.custom_label || t.slot_label || t.display_label,
-                    session: t.session,
-                    start_time: status?.custom_start_time || t.start_time,
-                    end_time: status?.custom_end_time || t.end_time
-                };
-            });
+                    label: `${drName} - ${t.slot_label || t.display_label}`,
+                    start_time: t.start_time
+                }));
 
-        let doctor_speciality = null;
-        if (doctor_id) {
-            const Doctor = require('../../models/Doctor');
-            const doc = await Doctor.findOne({ doctor_id });
-            if (doc) doctor_speciality = doc.speciality;
+            if (available.length > 0) {
+                results.push({
+                    doctor_name: drName,
+                    doctor_id: drId,
+                    speciality: dr.speciality,
+                    available_count: available.length,
+                    slots: available
+                });
+            }
         }
 
         res.json({
             success: true,
             date,
-            doctor_name,
-            doctor_speciality,
-            doctor_id: doctor_id || null,
-            day_of_week: dayOfWeek,
-            is_clinic_open: true,
-            data: available_slots,
-            total_available: available_slots.length
+            formatted_date: queryDate.toISOString().split('T')[0],
+            data: results
         });
 
     } catch (err) {
@@ -179,10 +221,26 @@ exports.blockSlot = async (req, res) => {
         const queryDate = toMidnight(slot_date);
         const actor = blocked_by || (req.user ? req.user.username : 'SECRETARY');
 
+        // Resolve canonical doctor
+        const Doctor = require('../../models/Doctor');
+        const doctor = await Doctor.findOne({
+            $or: [
+                { doctor_id: doctor_id || 'NONE' },
+                { name: { $regex: new RegExp(`^${doctor_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
+            ]
+        });
+
+        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+        if (!doctor.is_active) return res.status(400).json({ success: false, message: 'Doctor is inactive' });
+
+        const finalName = doctor.name;
+        const finalId = doctor.doctor_id;
+
         const ops = slots.map(slot_id =>
             SlotAvailability.findOneAndUpdate(
-                { slot_id, slot_date: queryDate, doctor_name, doctor_id: doctor_id || null },
+                { slot_id, slot_date: queryDate, doctor_name: finalName },
                 {
+                    doctor_id: finalId,
                     is_booked: false,
                     blocked_by_admin: true,
                     blocked_reason: reason || null,
@@ -222,26 +280,44 @@ exports.unblockSlot = async (req, res) => {
         const queryDate = toMidnight(slot_date);
         const actor = req.user ? req.user.username : 'SECRETARY';
 
-        await SlotAvailability.updateMany(
-            {
-                slot_id: { $in: slots },
-                slot_date: queryDate,
-                doctor_name,
-                doctor_id: doctor_id || null,
-                is_booked: false // Safety: don't unblock if actually booked
-            },
-            {
-                blocked_by_admin: false,
-                blocked_reason: null,
-                blocked_by: null,
-                blocked_at: null
-            }
+        // Resolve canonical doctor
+        const Doctor = require('../../models/Doctor');
+        const doctor = await Doctor.findOne({
+            $or: [
+                { doctor_id: doctor_id || 'NONE' },
+                { name: { $regex: new RegExp(`^${doctor_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
+            ]
+        });
+
+        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+        const finalName = doctor.name;
+        const finalId = doctor.doctor_id;
+
+        const ops = slots.map(slot_id =>
+            SlotAvailability.findOneAndUpdate(
+                {
+                    slot_id,
+                    slot_date: queryDate,
+                    doctor_name: finalName,
+                    is_booked: false // Safety: don't unblock if actually booked
+                },
+                {
+                    doctor_id: finalId,
+                    blocked_by_admin: false,
+                    blocked_reason: null,
+                    blocked_by: null,
+                    blocked_at: null
+                },
+                { upsert: false } // Don't create new ones if they don't exist
+            )
         );
+
+        await Promise.all(ops);
 
         await audit({
             event_type: 'SLOT_UNBLOCKED',
             entity_type: 'time_slots',
-            entity_id: `${doctor_name}_${slot_date}`,
+            entity_id: `${finalName}_${slot_date}`,
             actor,
             actor_type: req.user ? req.user.role : 'SECRETARY',
             new_value: { slots }
@@ -305,9 +381,25 @@ exports.updateDailySlot = async (req, res) => {
         const queryDate = toMidnight(slot_date);
         const actor = req.user?.username || 'ADMIN';
 
+        // Resolve canonical doctor
+        const Doctor = require('../../models/Doctor');
+        const doctor = await Doctor.findOne({
+            $or: [
+                { doctor_id: doctor_id || 'NONE' },
+                { name: { $regex: new RegExp(`^${doctor_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
+            ]
+        });
+
+        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+        if (!doctor.is_active) return res.status(400).json({ success: false, message: 'Doctor is inactive' });
+
+        const finalName = doctor.name;
+        const finalId = doctor.doctor_id;
+
         const updated = await SlotAvailability.findOneAndUpdate(
-            { slot_id, slot_date: queryDate, doctor_name, doctor_id: doctor_id || null },
+            { slot_id, slot_date: queryDate, doctor_name: finalName },
             {
+                doctor_id: finalId,
                 custom_label,
                 custom_start_time,
                 custom_end_time,
@@ -345,10 +437,19 @@ exports.createSlot = async (req, res) => {
         let i = 2;
         while (await Slot.findOne({ slot_id })) { slot_id = `${base}_${i++}`; }
 
+        // Automatically connect all active doctors to this new slot
+        const Doctor = require('../../models/Doctor');
+        const activeDoctors = await Doctor.find({ is_active: true });
+        const daysByDoctor = new Map();
+        activeDoctors.forEach(d => {
+            daysByDoctor.set(d.name, [1, 2, 3, 4, 5, 6]); // Default Mon-Sat
+        });
+
         const slot = await Slot.create({
             slot_id, slot_label, display_label: slot_label,
             start_time, end_time, session, is_active: true,
-            sort_order: sort_order ?? 99
+            sort_order: sort_order ?? 99,
+            days_by_doctor: daysByDoctor
         });
         const actor = req.user?.username || 'ADMIN';
         await audit({ event_type: 'SLOT_CREATED', entity_type: 'time_slots', entity_id: slot_id, actor, new_value: slot });

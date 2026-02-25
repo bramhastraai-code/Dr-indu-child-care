@@ -89,11 +89,15 @@ const PatientSchema = new mongoose.Schema({
 
 // Middleware to update hashes
 PatientSchema.pre('save', function () {
+  const { normalizePhone } = require('../utils/helpers');
+
   if (this.isModified('wa_id')) {
-    this.wa_hash = hashField(decrypt(this.wa_id));
+    const rawVal = decrypt(this.wa_id);
+    this.wa_hash = hashField(normalizePhone(rawVal));
   }
   if (this.isModified('email')) {
-    this.email_hash = hashField(decrypt(this.email));
+    const rawVal = decrypt(this.email);
+    this.email_hash = hashField(rawVal);
   }
 });
 

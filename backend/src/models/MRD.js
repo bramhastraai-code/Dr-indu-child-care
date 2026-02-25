@@ -19,6 +19,12 @@ const MRDEntrySchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    attending_doctor_id: {
+        type: String,
+        ref: 'Doctor',
+        default: null,
+        index: true
+    },
     chief_complaint: {
         type: String,
         default: null

@@ -50,7 +50,6 @@ app.use('/api/appointments', require('./modules/appointments/appointment.routes'
 app.use('/api/slots', require('./modules/system/slots.routes'));
 app.use('/api/mrd', require('./modules/patients/mrd.routes'));
 app.use('/api/bot', require('./modules/bot/bot.routes'));
-app.use('/api/whatsapp', require('./modules/bot/whatsapp.routes'));
 app.use('/api/config', require('./modules/system/config.routes'));
 app.use('/api/audit', require('./modules/system/audit.routes'));
 app.use('/api/doctors', require('./modules/doctors/doctor.routes'));

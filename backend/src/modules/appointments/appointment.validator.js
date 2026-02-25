@@ -8,7 +8,7 @@ const appointmentSchemas = {
         doctor_id: Joi.string().trim(),
         doctor_speciality: Joi.string().trim().allow('', null),
         visit_type: Joi.string().valid('VACCINATION', 'CONSULTATION', 'PULMONARY', 'FOLLOWUP').required(),
-        appointment_date: Joi.date().iso().min('now').message('Appointment date must be in the future').required(),
+        appointment_date: Joi.string().required().label('Appointment Date'),
         slot_id: Joi.string().trim().required(),
         appointment_mode: Joi.string().valid('ONLINE', 'OFFLINE').default('OFFLINE'),
         reason: Joi.string().trim().max(500).allow('', null),
@@ -22,14 +22,14 @@ const appointmentSchemas = {
         doctor_id: Joi.string().trim(),
         doctor_speciality: Joi.string().trim().allow('', null),
         visit_type: Joi.string().valid('VACCINATION', 'CONSULTATION', 'PULMONARY', 'FOLLOWUP').required(),
-        appointment_date: Joi.date().iso().min('now').required(),
+        appointment_date: Joi.string().required(),
         slot_id: Joi.string().trim().required(),
         reason: Joi.string().trim().max(500).allow('', null)
     }),
 
     // PATCH /api/appointments/:id
     update: Joi.object({
-        appointment_date: Joi.date().iso().min('now'),
+        appointment_date: Joi.string(),
         slot_id: Joi.string().trim(),
         doctor_name: Joi.string().trim().min(2),
         doctor_id: Joi.string().trim(),

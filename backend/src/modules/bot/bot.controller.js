@@ -18,7 +18,7 @@ const findPatientByWa = async (waId) => {
 
     return Patient.findOne({
         $or: [
-            { mobile_hash: mobileHash },
+            { wa_hash: mobileHash },
             { wa_id: waId },
             { wa_id: normalized },
             { wa_id: mobile }

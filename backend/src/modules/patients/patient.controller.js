@@ -73,15 +73,14 @@ exports.registerPatient = async (req, res) => {
             parent_name,
             wa_hash,
             gender: gender || null,
-            dob: dob ? new Date(dob) : null,
+            dob: parseDOB(dob),
             email: email || null,
             address: address || null,
             registration_source: (registration_source || 'dashboard').toLowerCase()
         });
 
         // Create blank MRD shell
-        await MRD.create({ patient_id, entries: [], vaccination_history: [] });
-
+        await MRD.create({ patient_id, entries: [] });
         // Link patient_id to active bot session if applicable
         await BotSession.updateMany(
             { wa_id: final_wa_id, is_active: true },

@@ -57,6 +57,7 @@ const enrichAppointment = async (a) => {
         // Keep `parent_mobile` for backward compatibility in API responses.
         parent_wa_id: patient?.wa_id || null,
         wa_id: a.wa_id || patient?.wa_id || null,
+        formatted_date: a.appointment_date ? a.appointment_date.toISOString().split('T')[0] : null,
         slot_label: availability?.custom_label || slot?.slot_label || slot?.display_label || null,
         start_time: availability?.custom_start_time || slot?.start_time || null,
         end_time: availability?.custom_end_time || slot?.end_time || null,
@@ -190,10 +191,13 @@ exports.createAppointment = async (req, res) => {
             // Check for daily overrides first (using existing SlotAvailability if any)
             const availability = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName });
             const [h, m] = (availability?.custom_start_time || slot.start_time).split(':');
-            const slotTime = new Date(queryDate);
-            slotTime.setUTCHours(h, m, 0, 0);
+            const slotTimeInMinutes = parseInt(h) * 60 + parseInt(m);
 
-            if (slotTime < new Date(now.getTime() - 5 * 60 * 1000)) {
+            // Convert 'now' to clinic local time (IST +5:30)
+            const clinicNow = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+            const nowInMinutes = clinicNow.getUTCHours() * 60 + clinicNow.getUTCMinutes();
+
+            if (slotTimeInMinutes < nowInMinutes - 5) {
                 return res.status(400).json({ success: false, message: 'This slot time has already passed for today.' });
             }
         }
@@ -246,12 +250,33 @@ exports.createAppointment = async (req, res) => {
             last_updated_by: req.user?.username || booking_source.toUpperCase()
         });
 
-        // 5. Mark slot as booked
-        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName });
-        if (avail) {
-            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_name: finalDoctorName, doctor_id: finalDoctorId } });
-        } else {
-            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName, doctor_id: finalDoctorId, is_booked: true, blocked_by_admin: false, appointment_id });
+        // 5. Mark slot as booked (Atomic update to prevent race conditions)
+        const availabilityQuery = {
+            slot_id,
+            slot_date: queryDate,
+            doctor_name: finalDoctorName,
+            is_booked: false,
+            blocked_by_admin: false
+        };
+
+        const availabilityUpdate = {
+            $set: {
+                is_booked: true,
+                appointment_id,
+                doctor_name: finalDoctorName,
+                doctor_id: finalDoctorId,
+                last_updated_at: new Date()
+            }
+        };
+
+        const avail = await SlotAvailability.findOneAndUpdate(availabilityQuery, availabilityUpdate, { upsert: true, new: true, rawResult: true });
+
+        // If it was already booked between our check and now, findOneAndUpdate might fail or return existing booked slot if not careful
+        // With upsert: true and the query including is_booked: false, it will fail if index exists and is_booked: true record exists.
+        // Actually, better to check result or use a more robust way.
+        if (!avail) {
+            // This shouldn't happen with upsert unless the query matched nothing and then failed unique index
+            return res.status(409).json({ success: false, message: 'Slot was just taken. Please choose another.' });
         }
 
         // 6. Audit
@@ -404,16 +429,18 @@ exports.updateAppointment = async (req, res) => {
         if (appointment_date || slot_id || doctor_name || doctor_id) {
             const newDate = appointment_date ? toMidnight(appointment_date) : appt.appointment_date;
             const newSlotId = slot_id || appt.slot_id;
-            let newDocName = doctor_name || appt.doctor_name;
-            let newDocId = doctor_id || appt.doctor_id;
-            let newDocSpeciality = doctor_speciality || appt.doctor_speciality;
+            // If change requested, resolve canonical name and ID
+            const { finalId: newDocId, finalName: newDocName, finalSpeciality: newDocSpeciality } = await resolveDoctorDetails({
+                doctor_id: doctor_id || appt.doctor_id,
+                doctor_name: doctor_name || appt.doctor_name,
+                doctor_speciality: doctor_speciality || appt.doctor_speciality
+            });
 
-            if (doctor_id && doctor_id !== appt.doctor_id) {
-                const doc = await Doctor.findOne({ doctor_id });
-                if (doc) {
-                    newDocName = doc.name;
-                    newDocSpeciality = doc.speciality;
-                }
+            // Check if target doctor is active
+            const Doctor = require('../../models/Doctor');
+            const targetDoc = await Doctor.findOne({ doctor_id: newDocId });
+            if (targetDoc && !targetDoc.is_active) {
+                return res.status(400).json({ success: false, message: `Doctor ${newDocName} is currently inactive and cannot accept appointments.` });
             }
 
             // Prevent rescheduling to past
@@ -433,10 +460,13 @@ exports.updateAppointment = async (req, res) => {
             if (isToday) {
                 const availability = await SlotAvailability.findOne({ slot_id: newSlotId, slot_date: newDate, doctor_name: newDocName });
                 const [h, m] = (availability?.custom_start_time || slotTemplate.start_time).split(':');
-                const slotTime = new Date(newDate);
-                slotTime.setUTCHours(h, m, 0, 0);
+                const slotTimeInMinutes = parseInt(h) * 60 + parseInt(m);
 
-                if (slotTime < new Date(now.getTime() - 5 * 60 * 1000)) {
+                // Convert 'now' to clinic local time (IST +5:30)
+                const clinicNow = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+                const nowInMinutes = clinicNow.getUTCHours() * 60 + clinicNow.getUTCMinutes();
+
+                if (slotTimeInMinutes < nowInMinutes - 5) {
                     return res.status(400).json({ success: false, message: 'The target slot time has already passed for today.' });
                 }
             }
@@ -459,11 +489,27 @@ exports.updateAppointment = async (req, res) => {
             );
 
             // Book new slot
-            const newAvail = await SlotAvailability.findOne({ slot_id: newSlotId, slot_date: newDate, doctor_name: newDocName });
-            if (newAvail) {
-                await SlotAvailability.updateOne({ _id: newAvail._id }, { $set: { is_booked: true, appointment_id, doctor_name: newDocName } });
-            } else {
-                await SlotAvailability.create({ slot_id: newSlotId, slot_date: newDate, doctor_name: newDocName, is_booked: true, blocked_by_admin: false, appointment_id });
+            const newAvail = await SlotAvailability.findOneAndUpdate(
+                {
+                    slot_id: newSlotId,
+                    slot_date: newDate,
+                    doctor_name: newDocName,
+                    is_booked: false,
+                    blocked_by_admin: false
+                },
+                {
+                    $set: {
+                        is_booked: true,
+                        appointment_id,
+                        doctor_name: newDocName,
+                        doctor_id: newDocId
+                    }
+                },
+                { upsert: true, new: true }
+            );
+
+            if (!newAvail) {
+                return res.status(409).json({ success: false, message: 'Target slot was just taken. Choose another.' });
             }
 
             const newSlot = await Slot.findOne({ slot_id: newSlotId });
@@ -576,7 +622,7 @@ exports.getAppointmentsByWaId = async (req, res) => {
             success: true,
             patient_id: patient.patient_id,
             child_name: patient.child_name,
-            mobile: patient.mobile || mobile,
+            mobile: patient.mobile || extractMobile(rawWaId),
             data: enriched
         });
     } catch (err) {
@@ -690,12 +736,28 @@ exports.bookByWhatsapp = async (req, res) => {
             last_updated_by: normalized
         });
 
-        // Mark slot booked
-        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName });
-        if (avail) {
-            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_name: finalDoctorName, doctor_id: finalDoctorId } });
-        } else {
-            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName, doctor_id: finalDoctorId, is_booked: true, blocked_by_admin: false, appointment_id });
+        // Mark slot booked (Atomic)
+        const finalAvail = await SlotAvailability.findOneAndUpdate(
+            {
+                slot_id,
+                slot_date: queryDate,
+                doctor_name: finalDoctorName,
+                is_booked: false,
+                blocked_by_admin: false
+            },
+            {
+                $set: {
+                    is_booked: true,
+                    appointment_id,
+                    doctor_name: finalDoctorName,
+                    doctor_id: finalDoctorId
+                }
+            },
+            { upsert: true, new: true }
+        );
+
+        if (!finalAvail) {
+            return res.status(409).json({ success: false, message: 'Slot was just taken. Please choose another.' });
         }
 
         await audit({
@@ -831,11 +893,28 @@ exports.bookByForm = async (req, res) => {
             last_updated_by: 'FORM'
         });
 
-        const avail = await SlotAvailability.findOne({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName });
-        if (avail) {
-            await SlotAvailability.updateOne({ _id: avail._id }, { $set: { is_booked: true, appointment_id, doctor_name: finalDoctorName, doctor_id: finalDoctorId } });
-        } else {
-            await SlotAvailability.create({ slot_id, slot_date: queryDate, doctor_name: finalDoctorName, doctor_id: finalDoctorId, is_booked: true, blocked_by_admin: false, appointment_id });
+        // Mark slot booked (Atomic)
+        const finalAvail = await SlotAvailability.findOneAndUpdate(
+            {
+                slot_id,
+                slot_date: queryDate,
+                doctor_name: finalDoctorName,
+                is_booked: false,
+                blocked_by_admin: false
+            },
+            {
+                $set: {
+                    is_booked: true,
+                    appointment_id,
+                    doctor_name: finalDoctorName,
+                    doctor_id: finalDoctorId
+                }
+            },
+            { upsert: true, new: true }
+        );
+
+        if (!finalAvail) {
+            return res.status(409).json({ success: false, message: 'Slot was just taken. Please choose another.' });
         }
 
         await audit({
