@@ -8,7 +8,12 @@
  * @returns {Date}
  */
 const toMidnight = (d) => {
-    const date = new Date(d);
+    let date;
+    if (d === 'today') {
+        date = new Date();
+    } else {
+        date = new Date(d);
+    }
     date.setUTCHours(0, 0, 0, 0);
     return date;
 };
