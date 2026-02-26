@@ -34,5 +34,5 @@ backend/
 1. Clone the repository
 2. Navigate to the backend folder: `cd backend`
 3. Install dependencies: `npm install`
-4. Setup environment variables: `cp .env.example .env` (and update values)
+4. Setup environment variables: `cp .env` (and update values)
 5. Start the server: `npm run dev` (if using nodemon) or `npm start`
