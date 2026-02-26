@@ -60,6 +60,7 @@ exports.registerPatient = async (req, res) => {
             // Section 2 – Photo & ID
             registration_date,
             photo,
+            patient_photo,
 
             // Section 3 – Parent / Guardian
             father_name,
@@ -80,11 +81,13 @@ exports.registerPatient = async (req, res) => {
             country,
             pin_code,
             phone_residence,
+            primary_address,
             address,
 
             // Section 5 – Additional
             source,
             reference_details,
+            ref_details,
             home_branch,
             doctor,
             religion,
@@ -92,9 +95,11 @@ exports.registerPatient = async (req, res) => {
             account_type,
             rating,
             remarks,
+            remark,
 
             // Section 6 – Enrollment
             enrollment_option,
+            send_to_specific,
 
             // Section 7 – Status
             is_active,
@@ -161,7 +166,8 @@ exports.registerPatient = async (req, res) => {
 
             // Photo & ID
             registration_date: registration_date ? new Date(registration_date) : new Date(),
-            photo: photo || null,
+            photo: photo || patient_photo || null,
+            patient_photo: patient_photo || photo || null,
 
             // Father
             father_name: father_name || null,
@@ -175,7 +181,7 @@ exports.registerPatient = async (req, res) => {
             mother_email: mother_email || null,
             mother_occupation: mother_occupation || null,
 
-            communication_preference: communication_preference || null,
+            communication_preference: communication_preference ?? null,
 
             // Contact
             email: email || null,
@@ -185,21 +191,25 @@ exports.registerPatient = async (req, res) => {
             country: country || null,
             pin_code: pin_code || null,
             phone_residence: phone_residence || null,
-            address: address || null,
+            primary_address: primary_address || address || null,
+            address: address || primary_address || null,
 
             // Additional
             source: source || null,
-            reference_details: reference_details || null,
+            reference_details: reference_details || ref_details || null,
+            ref_details: ref_details || reference_details || null,
             home_branch: home_branch || null,
             doctor: doctor || null,
             religion: religion || null,
             language: language || null,
             account_type: account_type || null,
-            rating: rating ?? null,
-            remarks: remarks || null,
+            rating: rating || null,
+            remarks: remarks || remark || null,
+            remark: remark || remarks || null,
 
             // Enrollment & Status
             enrollment_option: enrollment_option || 'just_enroll',
+            send_to_specific: send_to_specific ?? false,
             is_active: is_active !== undefined ? is_active : true,
 
             registration_source: (registration_source || 'dashboard').toLowerCase()

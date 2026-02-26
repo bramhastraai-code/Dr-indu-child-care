@@ -110,6 +110,10 @@ const PatientSchema = new mongoose.Schema({
     type: String,   // Base64 encoded string or URL
     default: null
   },
+  patient_photo: {
+    type: String,
+    default: null
+  },
 
   // ── Section 3: Parent / Guardian Information ─────────────────
   // Father
@@ -166,8 +170,7 @@ const PatientSchema = new mongoose.Schema({
   },
 
   communication_preference: {
-    type: String,
-    enum: ['Father', 'Mother', 'Both', 'WhatsApp', 'Email', 'SMS', null],
+    type: mongoose.Schema.Types.Mixed, // Can be Boolean or String
     default: null
   },
 
@@ -202,6 +205,11 @@ const PatientSchema = new mongoose.Schema({
     trim: true,
     default: null
   },
+  primary_address: {
+    type: String,
+    trim: true,
+    default: null
+  },
   // Kept for backward-compat
   address: {
     type: String,
@@ -232,6 +240,11 @@ const PatientSchema = new mongoose.Schema({
     trim: true,
     default: null
   },
+  ref_details: {
+    type: String,
+    trim: true,
+    default: null
+  },
   home_branch: {
     type: String,
     trim: true,
@@ -258,12 +271,15 @@ const PatientSchema = new mongoose.Schema({
     default: null
   },
   rating: {
-    type: Number,
-    min: 1,
-    max: 5,
+    type: String,
     default: null
   },
   remarks: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  remark: {
     type: String,
     trim: true,
     default: null
@@ -274,6 +290,10 @@ const PatientSchema = new mongoose.Schema({
     type: String,
     enum: ['just_enroll', 'send_to_specific', null],
     default: 'just_enroll'
+  },
+  send_to_specific: {
+    type: Boolean,
+    default: false
   },
 
   // ── Section 7: Status ─────────────────────────────────────────

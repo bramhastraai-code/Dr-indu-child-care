@@ -29,6 +29,7 @@ const personalFields = {
 const photoFields = {
     registration_date: Joi.date().allow(null),
     photo: optionalStr().max(5 * 1024 * 1024),          // Base64 up to ~5 MB string
+    patient_photo: optionalStr(),                       // URL or Base64
 };
 
 // ── Parent / Guardian block ───────────────────────────────────
@@ -43,9 +44,10 @@ const guardianFields = {
     mother_email: optionalEmail(),
     mother_occupation: optionalStr().max(100),
 
-    communication_preference: Joi.string()
-        .valid('Father', 'Mother', 'Both', 'WhatsApp', 'Email', 'SMS')
-        .allow('', null),
+    communication_preference: Joi.alternatives().try(
+        Joi.boolean(),
+        Joi.string().valid('Father', 'Mother', 'Both', 'WhatsApp', 'Email', 'SMS').allow('', null)
+    ),
 };
 
 // ── Contact block ─────────────────────────────────────────────
@@ -56,6 +58,7 @@ const contactFields = {
     country: optionalStr().max(100),
     pin_code: optionalStr().max(20),
     phone_residence: optionalStr().max(20),
+    primary_address: optionalStr().max(500),
     address: optionalStr().max(500),           // legacy
     email: optionalEmail(),
 };
@@ -64,13 +67,15 @@ const contactFields = {
 const additionalFields = {
     source: optionalStr().max(200),
     reference_details: optionalStr().max(500),
+    ref_details: optionalStr().max(500),
     home_branch: optionalStr().max(200),
     doctor: optionalStr().max(200),
     religion: optionalStr().max(100),
     language: optionalStr().max(100),
     account_type: optionalStr().max(100),
-    rating: Joi.number().integer().min(1).max(5).allow(null),
+    rating: optionalStr().max(50),
     remarks: optionalStr().max(1000),
+    remark: optionalStr().max(1000),
 };
 
 // ── Enrollment / Status block ─────────────────────────────────
@@ -79,6 +84,7 @@ const enrollmentFields = {
         .valid('just_enroll', 'send_to_specific')
         .allow(null)
         .default('just_enroll'),
+    send_to_specific: Joi.boolean().default(false),
     is_active: Joi.boolean().default(true),
 };
 
