@@ -44,7 +44,6 @@ mongoose.connect(process.env.MONGODB_URI)
     .catch(err => console.error('MongoDB initial connection error:', err));
 
 // Public Routes
-app.use('/api/system/health', (req, res) => res.json({ status: 'up' }));
 app.use('/api/admin', require('./modules/system/admin.routes'));
 app.use('/api/auth', require('./modules/auth/auth.routes'));
 
@@ -54,6 +53,7 @@ app.use('/api/appointments', require('./modules/appointments/appointment.routes'
 app.use('/api/slots', require('./modules/system/slots.routes'));
 app.use('/api/mrd', require('./modules/patients/mrd.routes'));
 app.use('/api/bot', require('./modules/bot/bot.routes'));
+app.use('/api/system', require('./modules/system/system.routes'));
 app.use('/api/config', require('./modules/system/config.routes'));
 app.use('/api/audit', require('./modules/system/audit.routes'));
 app.use('/api/doctors', require('./modules/doctors/doctor.routes'));
