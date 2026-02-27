@@ -15,28 +15,63 @@ const {
     getChatHistory
 } = require('./bot.controller');
 
-
-
-// All routes are now public for external integrations like n8n
-router.get('/interactions/unregistered', getUnregisteredInteractions);
+// ── Public (bot integration) ────────────────────────────────────────
 router.get('/session/:wa_id', getSession);
 router.post('/session/create', createSession);
 router.patch('/session/update', updateSession);
+router.post('/session/close', closeSession);
+router.get('/session/:wa_id/history', getSessionHistory);
 
 router.post('/chat/log', logChat);
 router.get('/chat/history/:wa_id', getChatHistory);
 
 router.post('/escalate', escalateSession);
-
-// Bot Session Management
-router.get('/session/:wa_id/history', getSessionHistory);
-router.post('/session/close', closeSession);
-
-// Bot Escalation Management
-router.get('/escalations', getEscalations);
-router.patch('/escalations/:id', resolveEscalation);
-
-// Bot Message Logging
 router.post('/message/log', logMessage);
+
+// ── Public (no auth) ─────────────────────────────────────────────
+router.get('/interactions/unregistered', getUnregisteredInteractions);
+router.get('/escalations', getEscalations);
+router.patch('/escalations/:escalation_id/resolve', resolveEscalation);
+
+// ── Analytics (Public) ───────────────────────────────────────────
+router.get('/analytics/daily', async (req, res) => {
+    try {
+        const BotSession = require('../../models/BotSession');
+        const BotChatHistory = require('../../models/BotChatHistory');
+        const Escalation = require('../../models/Escalation');
+        const Appointment = require('../../models/Appointment');
+        const Patient = require('../../models/Patient');
+
+        const { date } = req.query;
+        const targetDate = date ? new Date(date) : new Date();
+        const start = new Date(targetDate);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(targetDate);
+        end.setHours(23, 59, 59, 999);
+
+        const [totalInteractions, newRegistrations, appointmentsBooked, escalations] = await Promise.all([
+            BotChatHistory.countDocuments({ timestamp: { $gte: start, $lte: end } }),
+            Patient.countDocuments({ registered_at: { $gte: start, $lte: end }, registration_source: 'whatsapp' }),
+            Appointment.countDocuments({ created_at: { $gte: start, $lte: end }, booking_source: 'whatsapp' }),
+            Escalation.countDocuments({ escalated_at: { $gte: start, $lte: end } })
+        ]);
+
+        res.json({
+            success: true,
+            date: targetDate.toISOString().split('T')[0],
+            data: {
+                total_interactions: totalInteractions,
+                new_registrations: newRegistrations,
+                appointments_booked: appointmentsBooked,
+                escalations,
+                average_session_duration_minutes: null, // Would need session tracking
+                completion_rate: null,
+                top_queries: []
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 
 module.exports = router;

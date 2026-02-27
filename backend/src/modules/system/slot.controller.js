@@ -214,8 +214,8 @@ exports.blockSlot = async (req, res) => {
     try {
         const { slots, slot_date, doctor_name, doctor_id, reason, blocked_by } = req.body || {};
 
-        if (!slots || !Array.isArray(slots) || !slot_date || !doctor_name) {
-            return res.status(400).json({ success: false, message: 'Missing required fields' });
+        if (!slots || !Array.isArray(slots) || !slot_date || (!doctor_name && !doctor_id)) {
+            return res.status(400).json({ success: false, message: 'Missing required fields (slots, slot_date, and doctor_name/id)' });
         }
 
         const queryDate = toMidnight(slot_date);
@@ -273,8 +273,8 @@ exports.unblockSlot = async (req, res) => {
     try {
         const { slots, slot_date, doctor_name, doctor_id } = req.body || {};
 
-        if (!slots || !Array.isArray(slots) || !slot_date || !doctor_name) {
-            return res.status(400).json({ success: false, message: 'Missing required fields' });
+        if (!slots || !Array.isArray(slots) || !slot_date || (!doctor_name && !doctor_id)) {
+            return res.status(400).json({ success: false, message: 'Missing required fields (slots, slot_date, and doctor_name/id)' });
         }
 
         const queryDate = toMidnight(slot_date);
@@ -332,8 +332,60 @@ exports.unblockSlot = async (req, res) => {
 // @route   GET /api/slots/config
 exports.getSlotConfig = async (req, res) => {
     try {
-        const slots = await Slot.find().sort({ sort_order: 1 });
-        res.json({ success: true, data: slots });
+        const slots = await Slot.find({ is_active: true }).sort({ sort_order: 1, start_time: 1 });
+        const Doctor = require('../../models/Doctor');
+        const activeDoctors = await Doctor.find({ is_active: true });
+
+        // 1. Identify all unique names assigned to slots (Doctors + Categories)
+        const allIdentityNames = new Set();
+        activeDoctors.forEach(dr => {
+            allIdentityNames.add(dr.name);
+            allIdentityNames.add(dr.name.replace(/\./g, ''));
+        });
+
+        slots.forEach(s => {
+            if (s.days_by_doctor) {
+                for (const key of s.days_by_doctor.keys()) {
+                    allIdentityNames.add(key);
+                }
+            }
+        });
+
+        // 2. Build the result for each identity
+        const results = Array.from(allIdentityNames).map(name => {
+            const safeName = name.replace(/\./g, '');
+
+            const assignedSlots = slots.filter(s => {
+                const perDr = s.days_by_doctor?.get(safeName) || s.days_by_doctor?.get(name);
+                if (perDr && perDr.length > 0) return true;
+
+                // If it's a general slot (no specific doctor assigned), every REAL doctor gets it
+                const otherDrs = Array.from(s.days_by_doctor?.keys() || []).filter(n => n !== safeName && n !== name);
+                const isRealDoctor = activeDoctors.some(d => d.name === name || d.name.replace(/\./g, '') === name);
+
+                if (otherDrs.length === 0 && isRealDoctor) return true;
+                return false;
+            }).map(s => ({
+                slot_id: s.slot_id,
+                label: s.slot_label,
+                time: `${s.start_time} - ${s.end_time}`,
+                session: s.session,
+                active_days: s.days_by_doctor?.get(safeName) || s.days_by_doctor?.get(name) || s.days_of_week
+            }));
+
+            return {
+                name: name,
+                is_doctor: activeDoctors.some(d => d.name === name || d.name.replace(/\./g, '') === name),
+                slot_count: assignedSlots.length,
+                slots: assignedSlots
+            };
+        }).filter(item => item.slot_count > 0); // Only return names that actually have slots
+
+        res.json({
+            success: true,
+            count: results.length,
+            data: results
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -374,8 +426,8 @@ exports.updateDailySlot = async (req, res) => {
     try {
         const { slot_id, slot_date, doctor_name, doctor_id, custom_label, custom_start_time, custom_end_time } = req.body || {};
 
-        if (!slot_id || !slot_date || !doctor_name) {
-            return res.status(400).json({ success: false, message: 'Missing required fields' });
+        if (!slot_id || !slot_date || (!doctor_name && !doctor_id)) {
+            return res.status(400).json({ success: false, message: 'Missing required fields (slot_id, slot_date, and doctor_name/id)' });
         }
 
         const queryDate = toMidnight(slot_date);
@@ -440,9 +492,10 @@ exports.createSlot = async (req, res) => {
         // Automatically connect all active doctors to this new slot
         const Doctor = require('../../models/Doctor');
         const activeDoctors = await Doctor.find({ is_active: true });
-        const daysByDoctor = new Map();
+        const daysByDoctor = {};
         activeDoctors.forEach(d => {
-            daysByDoctor.set(d.name, [1, 2, 3, 4, 5, 6]); // Default Mon-Sat
+            const safeName = d.name.replace(/\./g, '');
+            daysByDoctor[safeName] = [1, 2, 3, 4, 5, 6]; // Default Mon-Sat
         });
 
         const slot = await Slot.create({
@@ -481,6 +534,29 @@ exports.deleteSlot = async (req, res) => {
         const actor = req.user?.username || 'ADMIN';
         await audit({ event_type: 'SLOT_DELETED', entity_type: 'time_slots', entity_id: slot_id, actor });
         res.json({ success: true, message: 'Slot permanently deleted' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @route   GET /api/slots/doctor-slots/:doctor_id
+exports.getDoctorSlots = async (req, res) => {
+    try {
+        const { doctor_id } = req.params;
+        const Doctor = require('../../models/Doctor');
+        const doctor = await Doctor.findOne({ doctor_id });
+        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+
+        const safeName = doctor.name.replace(/\./g, '');
+        const slots = await Slot.find({
+            is_active: true,
+            $or: [
+                { [`days_by_doctor.${safeName}`]: { $exists: true } },
+                { [`days_by_doctor.${doctor.name}`]: { $exists: true } }
+            ]
+        }).sort({ sort_order: 1, start_time: 1 });
+
+        res.json({ success: true, doctor_id, data: slots });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

@@ -1009,3 +1009,100 @@ exports.markReminderSent = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+
+// ── PATCH /api/appointments/:appointment_id/complete ─────────────────────────
+exports.completeAppointment = async (req, res) => {
+    try {
+        const { appointment_id } = req.params;
+        const { notes, next_followup_date } = req.body || {};
+
+        const appt = await Appointment.findOne({ appointment_id });
+        if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
+        if (appt.status === 'CANCELLED') return res.status(409).json({ success: false, message: 'Cannot complete a cancelled appointment.' });
+
+        await Appointment.updateOne({ appointment_id }, {
+            $set: {
+                status: 'COMPLETED',
+                completed_at: new Date(),
+                completed_by: req.user?.username || 'ADMIN',
+                notes: notes || appt.notes,
+                next_followup_date: next_followup_date ? new Date(next_followup_date) : null,
+                last_updated_at: new Date(),
+                last_updated_by: req.user?.username || 'ADMIN'
+            }
+        });
+
+        await audit({
+            event_type: 'APPOINTMENT_COMPLETED', entity_type: 'appointment', entity_id: appointment_id,
+            actor: req.user?.username || 'ADMIN', actor_type: req.user ? req.user.role : 'ADMIN'
+        });
+
+        res.json({ success: true, message: 'Appointment marked as completed' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// ── PATCH /api/appointments/:appointment_id/no-show ──────────────────────────
+exports.markNoShow = async (req, res) => {
+    try {
+        const { appointment_id } = req.params;
+
+        const appt = await Appointment.findOne({ appointment_id });
+        if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
+        if (appt.status === 'CANCELLED') return res.status(409).json({ success: false, message: 'Cannot mark a cancelled appointment as no-show.' });
+
+        await Appointment.updateOne({ appointment_id }, {
+            $set: {
+                status: 'NO_SHOW',
+                no_show_at: new Date(),
+                last_updated_at: new Date(),
+                last_updated_by: req.user?.username || 'ADMIN'
+            }
+        });
+
+        await audit({
+            event_type: 'APPOINTMENT_NO_SHOW', entity_type: 'appointment', entity_id: appointment_id,
+            actor: req.user?.username || 'ADMIN', actor_type: req.user ? req.user.role : 'ADMIN'
+        });
+
+        res.json({ success: true, message: 'Appointment marked as no-show' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// ── GET /api/appointments/reminders/pending-2h ────────────────────────────────
+exports.getPending2hReminders = async (req, res) => {
+    try {
+        const now = new Date();
+        const twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+        const today = toMidnight(now);
+
+        const appointments = await Appointment.find({
+            appointment_date: today,
+            status: { $in: ['BOOKED', 'CONFIRMED'] },
+            reminder_2h_sent: { $ne: true }
+        }).sort({ slot_id: 1 });
+
+        // Filter to only those whose slot time is within the next 2 hours
+        const Slot = require('../../models/Slot');
+        const result = [];
+        for (const appt of appointments) {
+            const slot = await Slot.findOne({ slot_id: appt.slot_id });
+            if (slot && slot.start_time) {
+                const [h, m] = slot.start_time.split(':').map(Number);
+                const slotTime = new Date(today);
+                slotTime.setUTCHours(h - 5, m - 30, 0, 0); // Convert IST to UTC
+                if (slotTime >= now && slotTime <= twoHoursLater) {
+                    result.push(appt);
+                }
+            }
+        }
+
+        const enriched = await Promise.all(result.map(enrichAppointment));
+        res.json({ success: true, data: enriched });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};

@@ -130,6 +130,12 @@ exports.escalateSession = async (req, res) => {
         const wa_id = getWaId(req.body);
         const { reason, failed_state, retry_count, session_id } = req.body || {};
 
+        if (!reason && !failed_state) {
+            return res.status(400).json({ success: false, message: 'reason or failed_state is required for escalation' });
+        }
+
+        const finalReason = reason || `Bot escalated from state: ${failed_state || 'UNKNOWN'}`;
+
         const session = await BotSession.findOneAndUpdate(
             { wa_id, is_active: true },
             { is_active: false, current_state: 'ERR_ESCALATED' }
@@ -138,7 +144,7 @@ exports.escalateSession = async (req, res) => {
         const escalation = await Escalation.create({
             wa_id,
             session_id: session_id || (session ? session.session_id : null),
-            reason,
+            reason: finalReason,
             failed_state,
             retry_count
         });
@@ -149,7 +155,7 @@ exports.escalateSession = async (req, res) => {
             entity_id: session_id || (session ? session.session_id : wa_id),
             actor: 'BOT',
             actor_type: 'BOT',
-            new_value: { reason, failed_state }
+            new_value: { reason: finalReason, failed_state }
         });
 
         res.json({ success: true, data: escalation });
@@ -215,64 +221,143 @@ exports.resolveEscalation = async (req, res) => {
     }
 };
 
-// @desc    Log chat message
+// @desc    Log chat message — logs ALL numbers (registered AND unregistered)
 // @route   POST /api/bot/chat/log
 exports.logChat = async (req, res) => {
     try {
-        const { wa_id, wa_number, user_name, message } = req.body || {};
+        const { wa_id, wa_number, user_name, message, sender = 'user' } = req.body || {};
         const target = normalizeWaId(wa_id || wa_number);
+
         if (!target || !message) {
             return res.status(400).json({ success: false, message: 'wa_id and message are required' });
         }
 
-        // Check if patient is registered
+        // Lookup patient — but do NOT gate on this. Log regardless.
         const patient = await findPatientByWa(target);
-
-        if (!patient) {
-            return res.status(200).json({ success: true, message: 'Chat ignored (not registered)' });
-        }
+        const is_registered = !!patient;
 
         await BotChatHistory.create({
             wa_id: target,
-            user_name: user_name || patient.parent_name || 'User',
+            user_name: user_name || (patient ? (patient.parent_name || patient.child_name || 'User') : 'Unknown'),
             message,
-            is_registered: true
+            sender,          // 'user' | 'bot'
+            is_registered,
+            patient_id: patient ? patient.patient_id : null
         });
 
-        res.status(201).json({ success: true, message: 'Chat logged' });
+        res.status(201).json({
+            success: true,
+            message: 'Chat logged',
+            is_registered,
+            patient_id: patient ? patient.patient_id : null
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 };
 
-// @desc    Get chat history
+// @desc    Get chat history — works for registered AND unregistered numbers
 // @route   GET /api/bot/chat/history/:wa_id
 exports.getChatHistory = async (req, res) => {
     try {
-        const wa_id = normalizeWaId(req.params.wa_id);
-        const history = await BotChatHistory.find({ wa_id })
-            .sort({ timestamp: -1 })
-            .limit(10);
+        const target = normalizeWaId(req.params.wa_id);
+        const limit = Math.min(parseInt(req.query.limit) || 10, 100);
 
-        res.json({ success: true, data: history });
+        // Try to find patient for enrichment — OK if not found
+        const patient = await findPatientByWa(target);
+
+        const history = await BotChatHistory.find({ wa_id: target })
+            .sort({ timestamp: -1 })
+            .limit(limit)
+            .lean();
+
+        res.json({
+            success: true,
+            wa_id: target,
+            is_registered: !!patient,
+            patient_id: patient ? patient.patient_id : null,
+            child_name: patient ? (patient.child_name || patient.full_name || null) : null,
+            total: history.length,
+            data: history
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 };
 
-// @desc    Get unregistered interactions (no patient_id)
+// @desc    Get unregistered interactions — numbers that chatted but are NOT registered patients
 // @route   GET /api/bot/interactions/unregistered
+// @access  Public
 exports.getUnregisteredInteractions = async (req, res) => {
     try {
-        const sessions = await BotSession.find({
-            patient_id: null,
+        const { limit = 50, page = 1 } = req.query;
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(100, parseInt(limit));
+
+        // Pull from BotChatHistory where is_registered = false, grouped per wa_id
+        const [chatLeads, countResult] = await Promise.all([
+            BotChatHistory.aggregate([
+                { $match: { is_registered: false } },
+                {
+                    $group: {
+                        _id: '$wa_id',
+                        message_count: { $sum: 1 },
+                        first_contact: { $min: '$timestamp' },
+                        last_seen: { $max: '$timestamp' },
+                        messages: {
+                            $push: { message: '$message', sender: '$sender', timestamp: '$timestamp' }
+                        }
+                    }
+                },
+                { $sort: { last_seen: -1 } },
+                { $skip: (pageNum - 1) * limitNum },
+                { $limit: limitNum },
+                {
+                    $project: {
+                        _id: 0,
+                        wa_id: '$_id',
+                        message_count: 1,
+                        first_contact: 1,
+                        last_seen: 1,
+                        latest_messages: { $slice: ['$messages', -5] }
+                    }
+                }
+            ]),
+            BotChatHistory.aggregate([
+                { $match: { is_registered: false } },
+                { $group: { _id: '$wa_id' } },
+                { $count: 'total' }
+            ])
+        ]);
+
+        // Enrich with active session data if present
+        const waIds = chatLeads.map(l => l.wa_id);
+        const activeSessions = await BotSession.find({
+            wa_id: { $in: waIds },
             is_active: true,
             expires_at: { $gt: new Date() }
-        })
-            .sort({ last_activity_at: -1 })
-            .limit(100);
+        }).select('wa_id current_state created_at last_activity_at').lean();
 
-        res.json({ success: true, data: sessions });
+        const sessionMap = {};
+        activeSessions.forEach(s => { sessionMap[s.wa_id] = s; });
+
+        const enriched = chatLeads.map(lead => ({
+            ...lead,
+            is_registered: false,
+            has_active_session: !!sessionMap[lead.wa_id],
+            bot_state: sessionMap[lead.wa_id]?.current_state || null,
+            session_started_at: sessionMap[lead.wa_id]?.created_at || null
+        }));
+
+        const total = countResult[0]?.total || 0;
+        res.json({
+            success: true,
+            total,
+            page: pageNum,
+            limit: limitNum,
+            pages: Math.ceil(total / limitNum),
+            data: enriched
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

@@ -1,36 +1,27 @@
 const express = require('express');
 const router = express.Router();
-const { getMRDByPatientId, addMRDEntry, updateMRDEntry, exportMRD, getEntryByAppointment } = require('./mrd.controller');
+const {
+    getMRDByPatientId,
+    addMRDEntry,
+    updateMRDEntry,
+    updateMRDById,
+    exportMRD,
+    getEntryByAppointment,
+    addVaccinationRecord,
+    lockMRDEntry,
+    uploadMRDAttachment
+} = require('./mrd.controller');
 
-/**
- * @openapi
- * /api/mrd/entry/{id}:
- *   patch:
- *     summary: Update an entry in MRD
- *     tags: [MRD]
- */
-
-// All routes are now public for external integrations like n8n
+// All MRD endpoints — public (no auth required)
+router.post('/vaccination', addVaccinationRecord);
+router.post('/entry', addMRDEntry);
 router.patch('/entry/:id', updateMRDEntry);
-
-/**
- * @openapi
- * /api/mrd/appointment/{appointment_id}:
- *   get:
- *     summary: Get MRD entry associated with a specific appointment
- *     tags: [MRD]
- */
 router.get('/appointment/:appointment_id', getEntryByAppointment);
+router.patch('/entry/:id/lock', lockMRDEntry);
+router.post('/entry/:id/attachment', uploadMRDAttachment);
 
-/**
- * @openapi
- * /api/mrd/{patient_id}/export:
- *   get:
- *     summary: Export MRD data for a patient
- *     tags: [MRD]
- */
 router.get('/:patient_id/export', exportMRD);
 router.get('/:patient_id', getMRDByPatientId);
-router.post('/entry', addMRDEntry);
+router.put('/:mrd_id', updateMRDById);
 
 module.exports = router;

@@ -44,37 +44,34 @@ const spec = {
     openapi: '3.0.0',
     info: {
         title: 'Dr. Indu Child Care — API',
-        version: '1.0.0',
+        version: '1.1.0',
         description: `
 **Complete API reference** for the WhatsApp Bot integration and Clinic Management Dashboard.
 
 ### Quick Start
-1. Call **POST /api/admin/login** (no auth needed) to get a JWT.
-2. Click the 🔒 **Authorize** button at the top and enter \`Bearer <token>\`.
-3. Expand any endpoint → **Try it out** → **Execute**.
+1. All APIs are **public** and do not require authentication for development/integration.
+2. Expand any endpoint → **Try it out** → **Execute**.
         `,
     },
     servers: [
-        // { url: '/', description: 'Current Origin (Recommended)' },
-        //{ url: 'http://localhost:5000/', description: 'Local Development' },
+        { url: 'http://localhost:5000/', description: 'Local Development' },
         { url: 'https://api-dr-indu-child-care.brahmaastra.ai/', description: 'Production Server' }
     ],
-    components: {
-        securitySchemes: {
-            bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
-            apiKeyAuth: { type: 'apiKey', name: 'x-api-key', in: 'header' }
-        }
-    },
-    security: [], // Default to no security for all routes since user requested public APIs
+    components: {},
+    security: [],
     tags: [
         { name: 'Admin', description: 'Admin user management' },
         { name: 'Patients', description: 'Patient registration and lookup' },
-        { name: 'Appointments', description: 'Appointment booking, cancellation, rescheduling' },
-        { name: 'Doctors', description: 'Doctor management' },
-        { name: 'Slots', description: 'Slot availability and configuration' },
+        { name: 'Appointments', description: 'Booking and session management' },
+        { name: 'Token System', description: 'Queue management and clinic display' },
+        { name: 'Doctors', description: 'Doctor profile management' },
+        { name: 'Doctor Availability', description: 'Real-time status, ETA and Workflows' },
+        { name: 'Slots', description: 'Master templates and daily availability' },
+        { name: 'Messaging', description: 'Outbound message queue and templates' },
         { name: 'MRD', description: 'Medical record documents' },
-        { name: 'System', description: 'Health check, config, audit logs' },
-        { name: 'WhatsApp Bot Integration', description: 'Complete tools for the WhatsApp bot' },
+        { name: 'System', description: 'Health check, system config, and logs' },
+        { name: 'Reports & Analytics', description: 'Dashboard stats and reporting' },
+        { name: 'WhatsApp Bot Integration', description: 'Specialized tools for the bot flow' },
     ],
     paths: {
         // ══ ADMIN ═════════════════════════════════════════════════════════════
@@ -82,20 +79,14 @@ const spec = {
             post: {
                 tags: ['Admin'], summary: 'Admin / Secretary login',
                 requestBody: body({ username: 'drinduchildcare@gmail.com', password: 'Drindu@1234' }),
-                responses: { 200: { description: 'Returns JWT token + user info' } }
+                responses: { 200: { description: 'Returns JWT' } }
             }
         },
         '/api/admin/users': {
-            get: {
-                tags: ['Admin'], summary: 'List all admin users',
-                responses: { 200: { description: 'Success' } }
-            },
+            get: { tags: ['Admin'], summary: 'List all admin users', responses: { 200: { description: 'Success' } } },
             post: {
                 tags: ['Admin'], summary: 'Create a new admin user',
-                requestBody: body({
-                    username: 'staff_1', email: 'staff@dicc.com', password: 'Pass@123',
-                    full_name: 'Staff Name', role: 'admin'
-                }),
+                requestBody: body({ username: 'staff_1', email: 'staff@dicc.com', password: 'Pass@123', full_name: 'Staff', role: 'admin' }),
                 responses: { 201: { description: 'Created' } }
             }
         },
@@ -113,42 +104,51 @@ const spec = {
             get: {
                 tags: ['Patients'], summary: 'List patients with pagination and filters',
                 parameters: [
-                    queryParam('page', '1'),
-                    queryParam('limit', '50'),
+                    queryParam('page', '1'), queryParam('limit', '50'),
                     queryParam('search', '', 'Name, wa_id, or ID'),
                     queryParam('source', '', ['whatsapp', 'form', 'dashboard', 'api']),
-                    queryParam('status', '', ['PENDING', 'COMPLETE']),
-                    queryParam('gender', '', ['Male', 'Female', 'Other']),
-                    queryParam('city', ''),
-                    queryParam('doctor', '')
+                    queryParam('gender', '', ['Male', 'Female', 'Other'])
                 ],
                 responses: { 200: { description: 'Success' } }
             },
             post: {
-                tags: ['Patients'], summary: 'Register a new patient (General)',
+                tags: ['Patients'], summary: 'Register a new patient (General / Dashboard)',
                 requestBody: body({
                     salutation: 'Master',
-                    first_name: 'Arjun', middle_name: 'Rohit', last_name: 'Sharma',
-                    gender: 'Male', mothers_name: 'Anjali Sharma',
-                    dob: '2020-05-20', age_years: 3, age_months: 9,
-                    birth_time_hours: 10, birth_time_minutes: 30, birth_time_ampm: 'AM',
-                    father_name: 'Rohit Sharma', father_mobile: '9876543210', father_occupation: 'Engineer',
-                    mother_name: 'Anjali Sharma', mother_mobile: '9876543211',
-                    area: 'Bandra', city: 'Mumbai', pin_code: '400050',
-                    wa_id: '9876543210', email: 'parent@example.com',
-                    doctor: 'Dr. Indu', enrollment_option: 'just_enroll'
+                    first_name: 'Arjun',
+                    middle_name: 'Rohit',
+                    last_name: 'Sharma',
+                    gender: 'Male',
+                    dob: '2020-05-20',
+                    mother_name: 'Anjali Sharma',
+                    father_name: 'Rohit Sharma',
+                    father_mobile: '9876543210',
+                    mother_mobile: null,
+                    parent_mobile: '9876543210',
+                    wa_id: '9876543210',
+                    email: 'rohit@example.com',
+                    address: 'Kothrud, Pune',
+                    city: 'Pune',
+                    state: 'Maharashtra',
+                    pin_code: '411038',
+                    communication_preference: 'whatsapp',
+                    doctor: 'Dr. Indu',
+                    remarks: 'New patient from campaign',
+                    registration_source: 'dashboard',
+                    enrollment_option: 'just_enroll'
                 }),
-                responses: { 201: { description: 'Registered' } }
+                responses: { 201: { description: 'Created' } }
             }
         },
         '/api/patients/form': {
             post: {
                 tags: ['Patients'], summary: 'Register patient via Online Form',
                 requestBody: body({
-                    salutation: 'Miss', first_name: 'Sia', last_name: 'Patel',
-                    gender: 'Female', dob_unknown: false, dob: '2023-05-15',
-                    wa_id: '9123456789', father_name: 'Amit Patel', mother_name: 'Meena Patel',
-                    area: 'Colaba', city: 'Mumbai', registration_source: 'form'
+                    first_name: 'Sia',
+                    last_name: 'Patel',
+                    wa_id: '9123456789',
+                    gender: 'Female',
+                    registration_source: 'form'
                 }),
                 responses: { 201: { description: 'Registered via form' } }
             }
@@ -157,75 +157,72 @@ const spec = {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Register patient via WhatsApp Bot',
                 requestBody: body({
-                    salutation: 'Master', first_name: 'Arjun', last_name: 'Sharma',
-                    gender: 'Male', dob: '2022-01-01', wa_id: '9876543210',
-                    father_name: 'Rohit Sharma', registration_source: 'whatsapp'
+                    first_name: 'Arjun',
+                    last_name: 'Sharma',
+                    gender: 'Male',
+                    wa_id: '9876543210',
+                    registration_source: 'whatsapp'
                 }),
-                responses: {
-                    201: { description: 'Registered via bot' },
-                    409: { description: 'Patient already exists with this mobile' }
-                }
+                responses: { 201: { description: 'Registered via bot' } }
             }
         },
         '/api/patients/{patient_id}': {
-            get: {
-                tags: ['Patients'], summary: 'Get patient by DICC ID',
-                parameters: [pathParam('patient_id', 'DICC-2026-0001')],
-                responses: { 200: { description: 'Success' } }
-            },
+            get: { tags: ['Patients'], summary: 'Get patient by DICC ID', parameters: [pathParam('patient_id', 'DICC-2026-0001')], responses: { 200: { description: 'Success' } } },
             put: {
                 tags: ['Patients'], summary: 'Update patient details',
                 parameters: [pathParam('patient_id', 'DICC-2026-0001')],
                 requestBody: body({
-                    salutation: 'Master',
                     first_name: 'Arjun',
-                    last_name: 'R. Sharma',
-                    father_name: 'Rohit Sharma',
-                    mother_name: 'Anjali Sharma',
-                    dob: '2020-05-20',
-                    area: 'Bandra',
-                    city: 'Mumbai',
-                    is_active: true
+                    last_name: 'Sharma',
+                    is_active: true,
+                    remarks: 'Updated contact details',
+                    email: 'updated@example.com'
                 }, false),
                 responses: { 200: { description: 'Updated' } }
             }
         },
-        '/api/patients/by-wa/{wa_id}': {
-            get: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Lookup patient by WhatsApp ID / Number',
-                parameters: [pathParam('wa_id', '9876543210')],
-                responses: { 200: { description: 'Success' } }
+        '/api/patients/{patient_id}/photo': {
+            patch: {
+                tags: ['Patients'], summary: 'Upload patient photo (Base64)',
+                parameters: [pathParam('patient_id', 'DICC-2026-0001')],
+                requestBody: body({ photo: 'data:image/jpeg;base64,...' }),
+                responses: { 200: { description: 'Photo updated' } }
             }
+        },
+        '/api/patients/by-wa/{wa_id}': {
+            get: { tags: ['WhatsApp Bot Integration'], summary: 'Lookup patient by WhatsApp Number', parameters: [pathParam('wa_id', '9876543210')], responses: { 200: { description: 'Success' } } }
         },
 
         // ══ APPOINTMENTS ══════════════════════════════════════════════════════
         '/api/appointments': {
             get: {
-                tags: ['Appointments'], summary: 'List appointments with filters',
-                parameters: [
-                    queryParam('date', '2026-06-15'),
-                    queryParam('doctor_id', 'DOC-00001'),
-                    queryParam('status', 'CONFIRMED', ['BOOKED', 'CONFIRMED', 'COMPLETED', 'CANCELLED'])
-                ],
+                tags: ['Appointments'], summary: 'List and filter appointments',
+                parameters: [queryParam('date', '2026-06-15'), queryParam('doctor_id', ''), queryParam('status', 'CONFIRMED')],
                 responses: { 200: { description: 'Success' } }
             },
             post: {
-                tags: ['Appointments'], summary: 'Book appointment (Dashboard / Admin)',
+                tags: ['Appointments'], summary: 'Book appointment (Dashboard/Admin)',
                 requestBody: body({
-                    patient_id: 'DICC-2026-0001', doctor_name: 'Dr. Indu',
-                    appointment_date: '2026-06-15', slot_id: 'S1',
-                    doctor_speciality: 'Pediatrics', visit_type: 'CONSULTATION'
+                    patient_id: 'DICC-2026-0001',
+                    doctor_name: 'Dr. Indu',
+                    appointment_date: '2026-06-15',
+                    slot_id: 'S1',
+                    visit_type: 'CONSULTATION',
+                    appointment_mode: 'OFFLINE'
                 }),
                 responses: { 201: { description: 'Booked' } }
             }
         },
         '/api/appointments/form': {
             post: {
-                tags: ['Appointments'], summary: 'Book via public web form (wa_id)',
+                tags: ['Appointments'], summary: 'Book via public web form (Simplified)',
                 requestBody: body({
-                    wa_id: '9876543210', doctor_name: 'Dr. Indu',
-                    appointment_date: '2026-06-15', slot_id: 'S1',
-                    doctor_speciality: 'Pediatrics', visit_type: 'CONSULTATION'
+                    wa_id: '9175152244',
+                    doctor_name: 'Dr. Indu',
+                    appointment_date: '2026-06-15',
+                    slot_id: 'S1',
+                    visit_type: 'CONSULTATION',
+                    appointment_mode: 'OFFLINE'
                 }),
                 responses: { 201: { description: 'Booked' } }
             }
@@ -234,36 +231,26 @@ const spec = {
             post: {
                 tags: ['WhatsApp Bot Integration'], summary: 'Book via WhatsApp bot (wa_id)',
                 requestBody: body({
-                    wa_id: '9876543210', doctor_name: 'Dr. Indu',
-                    appointment_date: '2026-06-15', slot_id: 'S1',
-                    doctor_speciality: 'Pediatrics', visit_type: 'CONSULTATION'
+                    wa_id: '9876543210',
+                    doctor_name: 'Dr. Indu',
+                    appointment_date: '2026-06-15',
+                    slot_id: 'S1',
+                    visit_type: 'CONSULTATION',
+                    appointment_mode: 'OFFLINE',
+                    reason: 'Cold and Fever'
                 }),
                 responses: { 201: { description: 'Booked' } }
             }
         },
         '/api/appointments/stats': {
-            get: {
-                tags: ['Appointments'], summary: 'Appointment stats (today or by date)',
-                parameters: [queryParam('date', '2026-06-15')],
-                responses: { 200: { description: 'Stats returned' } }
-            }
+            get: { tags: ['Appointments'], summary: 'Appointment summary for date', parameters: [queryParam('date', '2026-06-15')], responses: { 200: { description: 'Stats returned' } } }
         },
         '/api/appointments/{appointment_id}': {
-            get: {
-                tags: ['Appointments'], summary: 'Get single appointment by ID',
-                parameters: [pathParam('appointment_id', 'APT-2026-00001')],
-                responses: { 200: { description: 'Success' } }
-            },
+            get: { tags: ['Appointments'], summary: 'Get single appointment details', parameters: [pathParam('appointment_id', 'APT-2026-00001')], responses: { 200: { description: 'Success' } } },
             patch: {
-                tags: ['Appointments'], summary: 'Update / reschedule appointment',
+                tags: ['Appointments'], summary: 'Update / Reschedule appointment',
                 parameters: [pathParam('appointment_id', 'APT-2026-00001')],
-                requestBody: body({
-                    appointment_date: '2026-06-20',
-                    slot_id: 'S2',
-                    doctor_name: 'Dr. Indu',
-                    visit_type: 'FOLLOWUP',
-                    reason: 'Follow-up consultation'
-                }, false),
+                requestBody: body({ appointment_date: '2026-06-16', slot_id: 'S2' }, false),
                 responses: { 200: { description: 'Updated' } }
             }
         },
@@ -271,168 +258,307 @@ const spec = {
             patch: {
                 tags: ['Appointments'], summary: 'Cancel appointment',
                 parameters: [pathParam('appointment_id', 'APT-2026-00001')],
-                requestBody: body({ cancellation_reason: 'Patient changed mind' }, false),
+                requestBody: body({ cancellation_reason: 'Patient traveling' }, false),
                 responses: { 200: { description: 'Cancelled' } }
             }
         },
-        '/api/appointments/by-wa/{wa_id}': {
+        '/api/appointments/{appointment_id}/complete': {
+            patch: { tags: ['Appointments'], summary: 'Mark as Completed', parameters: [pathParam('appointment_id', 'APT-2026-00001')], responses: { 200: { description: 'Completed' } } }
+        },
+        '/api/appointments/{appointment_id}/no-show': {
+            patch: { tags: ['Appointments'], summary: 'Mark as No-Show (Penalty logged)', parameters: [pathParam('appointment_id', 'APT-2026-00001')], responses: { 200: { description: 'Recorded' } } }
+        },
+
+        // ══ TOKEN SYSTEM ══════════════════════════════════════════════════════
+        '/api/appointments/book-with-token': {
+            post: {
+                tags: ['Token System'], summary: 'Book appointment + Assign Queue Token',
+                requestBody: body({
+                    patient_id: 'DICC-2026-0001',
+                    doctor_id: 'DOC-00007',
+                    appointment_date: '2026-06-15',
+                    slot_id: 'S1',
+                    visit_type: 'CONSULTATION',
+                    booking_source: 'dashboard'
+                }),
+                responses: { 201: { description: 'Booked + Token generated' } }
+            }
+        },
+        '/api/appointments/daily-tokens': {
             get: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Get upcoming appointments by WhatsApp ID',
-                parameters: [pathParam('wa_id', '9876543210')],
+                tags: ['Token System'], summary: 'List tokens by doctor/date',
+                parameters: [queryParam('date', '2026-06-15'), queryParam('doctor_id', '')],
                 responses: { 200: { description: 'Success' } }
             }
         },
-        '/api/appointments/reminders/pending-24h': {
-            get: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Get appointments for tomorrow (for 24h reminders)',
-                responses: { 200: { description: 'List of reminders' } }
+        '/api/appointments/clinic-display': {
+            get: { tags: ['Token System'], summary: '📺 Public Display Board Data', parameters: [queryParam('date', '2026-06-15')], responses: { 200: { description: 'Clinic board status' } } }
+        },
+        '/api/appointments/next-token/{doctor_id}': {
+            get: { tags: ['Token System'], summary: 'Advance Queue (Next Patient)', parameters: [pathParam('doctor_id', 'DOC-00007')], responses: { 200: { description: 'Success' } } }
+        },
+        '/api/appointments/token/{token}/check-in': {
+            post: {
+                tags: ['Token System'], summary: 'Mark patient as Physically Arrived',
+                parameters: [pathParam('token', '1')],
+                requestBody: body({ doctor_id: 'DOC-00007', date: '2026-06-15' }, false),
+                responses: { 200: { description: 'Checked in' } }
             }
         },
-        '/api/appointments/reminders/{appointment_id}/mark-sent': {
+        '/api/appointments/token/{token}/status': {
             patch: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Mark reminder as sent (updates timestamp)',
-                parameters: [pathParam('appointment_id', 'APT-2026-00001')],
+                tags: ['Token System'], summary: 'Manual token status override',
+                parameters: [pathParam('token', '1')],
+                requestBody: body({
+                    status: 'COMPLETED',
+                    doctor_id: 'DOC-00007',
+                    date: '2026-06-15'
+                }),
                 responses: { 200: { description: 'Updated' } }
             }
+        },
+        '/api/appointments/token-status/{token}': {
+            get: {
+                tags: ['Token System'], summary: 'Patient Self-Check (Position)',
+                parameters: [pathParam('token', '1'), queryParam('doctor_id', ''), queryParam('date', '2026-06-15')],
+                responses: { 200: { description: 'Queue position' } }
+            }
+        },
+        '/api/appointments/auto-reschedule': {
+            post: { tags: ['Token System'], summary: 'Move missed token to next available slot', requestBody: body({ appointment_id: 'APT-001' }), responses: { 200: { description: 'Moved' } } }
         },
 
         // ══ DOCTORS ═══════════════════════════════════════════════════════════
         '/api/doctors': {
-            get: {
-                tags: ['Doctors'], summary: 'List all doctors',
-                responses: { 200: { description: 'Success' } }
-            },
+            get: { tags: ['Doctors'], summary: 'List all doctors', responses: { 200: { description: 'Success' } } },
             post: {
-                tags: ['Doctors'], summary: 'Create a new doctor profile',
-                requestBody: body({ name: 'Dr. Indu', registration_number: 'REG123', speciality: 'Pediatrics' }),
+                tags: ['Doctors'], summary: 'Create doctor profile',
+                requestBody: body({
+                    name: 'Dr. Indu',
+                    speciality: 'Pediatrics',
+                    qualification: 'MBBS, MD',
+                    experience: '15 Years',
+                    available_slots: {
+                        "1": ["S1", "S2"],
+                        "2": ["S1", "S2"]
+                    }
+                }),
                 responses: { 201: { description: 'Created' } }
             }
         },
         '/api/doctors/{doctor_id}': {
-            get: {
-                tags: ['Doctors'], summary: 'Get doctor by ID',
-                parameters: [pathParam('doctor_id', 'DOC-00001')],
-                responses: { 200: { description: 'Success' } }
-            },
+            get: { tags: ['Doctors'], summary: 'Get doctor details', parameters: [pathParam('doctor_id', 'DOC-00007')], responses: { 200: { description: 'Success' } } },
             patch: {
                 tags: ['Doctors'], summary: 'Update doctor profile',
-                parameters: [pathParam('doctor_id', 'DOC-00001')],
+                parameters: [pathParam('doctor_id', 'DOC-00007')],
                 requestBody: body({ name: 'Dr. Indu (Updated)' }, false),
                 responses: { 200: { description: 'Updated' } }
             },
-            delete: {
-                tags: ['Doctors'], summary: 'Delete a doctor profile',
-                parameters: [pathParam('doctor_id', 'DOC-00001')],
-                responses: { 200: { description: 'Deleted' } }
+            delete: { tags: ['Doctors'], summary: 'Delete doctor profile', parameters: [pathParam('doctor_id', 'DOC-00007')], responses: { 200: { description: 'Deleted' } } }
+        },
+
+        // ══ DOCTOR AVAILABILITY ═══════════════════════════════════════════════
+        '/api/doctor/availability/update': {
+            post: {
+                tags: ['Doctor Availability'], summary: 'Update status/ETA (Triggers patient alerts)',
+                requestBody: body({
+                    doctor_id: 'DOC-00007',
+                    status: 'LATE',
+                    eta_minutes: 30,
+                    eta_time: '10:45 AM',
+                    notes: 'Heavy traffic on highway',
+                    date: '2026-06-15'
+                }),
+                responses: { 200: { description: 'Updated + Workflow results' } }
             }
+        },
+        '/api/doctor/availability/{doctor_id}': {
+            get: {
+                tags: ['Doctor Availability'], summary: 'Real-time status and queue counts',
+                parameters: [pathParam('doctor_id', 'DOC-00007'), queryParam('date', '2026-06-15')],
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+        '/api/doctor/availability/{doctor_id}/status': {
+            patch: {
+                tags: ['Doctor Availability'], summary: 'Quick status patch',
+                parameters: [pathParam('doctor_id', 'DOC-00007')],
+                requestBody: body({ status: 'PRESENT', notes: 'Arrived at clinic' }),
+                responses: { 200: { description: 'Updated' } }
+            }
+        },
+        '/api/doctor/availability/{doctor_id}/eta': {
+            patch: {
+                tags: ['Doctor Availability'], summary: 'Quick ETA update',
+                parameters: [pathParam('doctor_id', 'DOC-00007')],
+                requestBody: body({ eta_minutes: 15, eta_time: '11:00 AM', reason: 'Consultation running long' }),
+                responses: { 200: { description: 'Updated' } }
+            }
+        },
+        '/api/doctor/late-checkin': {
+            post: {
+                tags: ['Doctor Availability'], summary: 'Log late check-in event',
+                requestBody: body({
+                    doctor_id: 'DOC-00007',
+                    eta_minutes: 30,
+                    reason: 'Emergency case at other hospital'
+                }),
+                responses: { 201: { description: 'Logged' } }
+            }
+        },
+        '/api/doctor/late-checkins/{doctor_id}': {
+            get: { tags: ['Doctor Availability'], summary: 'History of late arrivals', parameters: [pathParam('doctor_id', 'DOC-00007')], responses: { 200: { description: 'History' } } }
+        },
+        '/api/doctor/availability-dashboard/{doctor_id}': {
+            get: { tags: ['Doctor Availability'], summary: 'Full Dashboard (Stats + Tokens)', parameters: [pathParam('doctor_id', 'DOC-00007')], responses: { 200: { description: 'Dashboard data' } } }
         },
 
         // ══ SLOTS ═════════════════════════════════════════════════════════════
         '/api/slots/available': {
             get: {
                 tags: ['Slots'], summary: 'Get available slots',
-                parameters: [
-                    queryParam('doctor_name', 'Dr. Indu', null, true),
-                    queryParam('date', '2026-06-15', null, true),
-                    queryParam('doctor_id', 'DOC-00001')
-                ],
-                responses: { 200: { description: 'Success' } }
+                parameters: [queryParam('doctor_name', 'Dr. Indu', null, true), queryParam('date', '2026-06-15', null, true)],
+                responses: {
+                    200: {
+                        description: 'Success',
+                        content: {
+                            'application/json': {
+                                example: {
+                                    success: true,
+                                    date: '2026-06-15',
+                                    doctor_name: 'Dr. Indu',
+                                    doctor_id: 'DOC-00007',
+                                    data: [
+                                        { slot_id: 'SLOT_0900', label: 'Dr. Indu - 09:00 AM', session: 'MORNING', start_time: '09:00', end_time: '09:30' }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
             }
         },
         '/api/slots/config': {
-            get: { tags: ['Slots'], summary: 'Get all slot templates', responses: { 200: { description: 'Success' } } },
+            get: {
+                tags: ['Slots'], summary: 'Get all slot templates',
+                responses: {
+                    200: {
+                        description: 'Success',
+                        content: {
+                            'application/json': {
+                                example: {
+                                    success: true,
+                                    count: 11,
+                                    data: [
+                                        {
+                                            name: 'Dr. Indu',
+                                            is_doctor: true,
+                                            slot_count: 6,
+                                            slots: [
+                                                { slot_id: 'SLOT_0100', label: '01:00 AM', time: '01:00 - 01:30', session: 'AFTERNOON', active_days: [1, 2, 3, 4, 5, 6] }
+                                            ]
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            },
             put: {
                 tags: ['Slots'], summary: 'Bulk update slot templates',
-                requestBody: body({
-                    slots: [
-                        { slot_id: 'SLOT_1000', slot_label: '10:00 AM', start_time: '10:00', end_time: '10:30', session: 'MORNING' }
-                    ]
-                }),
+                requestBody: body({ slots: [{ slot_id: 'SLOT_0100', slot_label: '01:00 AM', start_time: '01:00' }] }),
                 responses: { 200: { description: 'Updated' } }
             }
         },
         '/api/slots/config/add': {
             post: {
-                tags: ['Slots'], summary: 'Create a new slot template',
-                requestBody: body({
-                    slot_label: '12:00 PM',
-                    start_time: '12:00',
-                    end_time: '12:30',
-                    session: 'AFTERNOON'
-                }),
+                tags: ['Slots'], summary: 'Create new slot template',
+                requestBody: body({ slot_label: '12:00 PM', start_time: '12:00', end_time: '12:30', session: 'AFTERNOON' }),
                 responses: { 201: { description: 'Created' } }
             }
         },
         '/api/slots/config/{slot_id}': {
-            delete: {
-                tags: ['Slots'], summary: 'Delete a slot template',
-                parameters: [pathParam('slot_id', 'SLOT_1000')],
-                responses: { 200: { description: 'Deleted' } }
-            }
+            delete: { tags: ['Slots'], summary: 'Delete template', parameters: [pathParam('slot_id', 'SLOT_0100')], responses: { 200: { description: 'Deleted' } } }
         },
         '/api/slots/daily-update': {
             post: {
-                tags: ['Slots'], summary: 'Override a specific slot for a specific day/doctor',
-                requestBody: body({
-                    slot_id: 'SLOT_1000',
-                    slot_date: '2026-06-15',
-                    doctor_name: 'Dr. Indu',
-                    custom_label: 'Urgent Only',
-                    custom_start_time: '10:15'
-                }),
-                responses: { 200: { description: 'Updated for the day' } }
+                tags: ['Slots'], summary: 'Override slot for a day/doctor',
+                requestBody: body({ slot_id: 'SLOT_0100', slot_date: '2026-06-15', doctor_name: 'Dr. Indu', custom_label: 'Urgent' }),
+                responses: { 200: { description: 'Updated' } }
             }
+        },
+
+        // ══ MESSAGING ═════════════════════════════════════════════════════════
+        '/api/messages/doctor/late-alert': {
+            post: {
+                tags: ['Messaging'], summary: 'Queue manual doctor late alerts',
+                requestBody: body({ doctor_name: 'Dr. Indu', minutes_late: 30, affected_appointments: [] }),
+                responses: { 200: { description: 'Queued' } }
+            }
+        },
+        '/api/messages/messages/pending': {
+            get: { tags: ['Messaging'], summary: 'Poll pending messages (For bot)', responses: { 200: { description: 'List of formatted messages' } } }
+        },
+        '/api/messages/messages/{queue_id}/status': {
+            patch: { tags: ['Messaging'], summary: 'Update delivery status', parameters: [pathParam('queue_id', 'MQ-123')], requestBody: body({ status: 'SENT' }), responses: { 200: { description: 'Updated' } } }
         },
 
         // ══ MRD ═══════════════════════════════════════════════════════════════
         '/api/mrd/{patient_id}': {
-            get: {
-                tags: ['MRD'], summary: 'Get patient MRD',
-                parameters: [pathParam('patient_id', 'DICC-2026-0001')],
-                responses: { 200: { description: 'Full history' } }
-            }
+            get: { tags: ['MRD'], summary: 'Get patient history', parameters: [pathParam('patient_id', 'DICC-2026-0001')], responses: { 200: { description: 'Full history' } } }
         },
         '/api/mrd/entry': {
             post: {
-                tags: ['MRD'], summary: 'Add clinical entry',
-                requestBody: body({ patient_id: 'DICC-2026-0001', appointment_id: 'APT-2026-00001', diagnosis: 'Normal' }),
+                tags: ['MRD'], summary: 'Add clinical entry (Diagnosis/Prescription)',
+                requestBody: body({
+                    patient_id: 'DICC-2026-0001',
+                    appointment_id: 'APT-2026-00001',
+                    diagnosis: 'Viral Fever with Cough',
+                    weight: '12kg',
+                    temperature: '101 F',
+                    spo2: '98%',
+                    pulse: '80 bpm',
+                    head_circumference: '45 cm',
+                    symptoms: ['Fever', 'Cough', 'Body ache'],
+                    prescription: 'Tab. Paracetamol 250mg TDS x 3 days',
+                    advice: 'Take plenty of fluids and rest.',
+                    recorded_by: 'Dr. Indu',
+                    attachments: [
+                        { url: 'https://example.com/xray.jpg', name: 'Chest X-Ray', file_type: 'image/jpeg' }
+                    ]
+                }),
                 responses: { 201: { description: 'Added' } }
             }
         },
         '/api/mrd/appointment/{appointment_id}': {
-            get: {
-                tags: ['MRD'], summary: 'Get MRD entry by appointment ID',
-                parameters: [pathParam('appointment_id', 'APT-2026-00001')],
-                responses: { 200: { description: 'Success' } }
+            get: { tags: ['MRD'], summary: 'Get entry by appointment ID', parameters: [pathParam('appointment_id', 'APT-001')], responses: { 200: { description: 'Success' } } }
+        },
+        '/api/mrd/entry/{id}/lock': {
+            patch: { tags: ['MRD'], summary: 'Lock entry (Prevent further edits)', parameters: [pathParam('id', '69a16dc506a8fb8f7562879f')], responses: { 200: { description: 'Locked' } } }
+        },
+        '/api/mrd/entry/{id}/attachment': {
+            post: {
+                tags: ['MRD'], summary: 'Upload attachment to entry',
+                parameters: [pathParam('id', '69a16dc506a8fb8f7562879f')],
+                requestBody: body({ url: 'base64_string_here', name: 'Prescription Scan', file_type: 'image/jpeg' }),
+                responses: { 200: { description: 'Uploaded' } }
             }
         },
 
         // ══ BOT ═══════════════════════════════════════════════════════════════
-        '/api/bot/session/{wa_id}': {
-            get: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Get active bot session',
-                parameters: [pathParam('wa_id', '9876543210')],
-                responses: { 200: { description: 'Success' } }
-            }
-        },
-        '/api/bot/session/create': {
-            post: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Create a new bot session',
-                requestBody: body({ wa_id: '9876543210' }),
-                responses: { 201: { description: 'Created' } }
-            }
-        },
+        '/api/bot/session/{wa_id}': { get: { tags: ['WhatsApp Bot Integration'], summary: 'Get active bot session', parameters: [pathParam('wa_id', '9876543210')], responses: { 200: { description: 'Success' } } } },
+        '/api/bot/session/create': { post: { tags: ['WhatsApp Bot Integration'], summary: 'Create bot session', requestBody: body({ wa_id: '9876543210' }), responses: { 201: { description: 'Created' } } } },
         '/api/bot/session/update': {
             patch: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Update bot session state/data',
+                tags: ['WhatsApp Bot Integration'], summary: 'Update state / context',
                 requestBody: body({
                     wa_id: '9876543210',
-                    current_state: 'S30_BOOKING_PREVIEW',
+                    current_state: 'APPOINTMENT_CONFIRMED',
                     session_data: {
-                        doctor_name: 'Dr. Indu',
-                        doctor_speciality: 'Pediatrics',
-                        appointment_date: '2026-06-15',
-                        slot_id: 'S1'
+                        last_action: 'BOOKING',
+                        selected_doctor: 'Dr. Indu',
+                        selected_date: '2026-06-15'
                     }
                 }, false),
                 responses: { 200: { description: 'Updated' } }
@@ -440,51 +566,42 @@ const spec = {
         },
         '/api/bot/escalate': {
             post: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Escalate to human support',
-                requestBody: body({ wa_id: '9876543210', reason: 'N/A' }),
+                tags: ['WhatsApp Bot Integration'], summary: 'Escalate to human',
+                requestBody: body({
+                    wa_id: '9876543210',
+                    reason: 'User keeps asking for help',
+                    failed_state: 'S40_MAIN_MENU'
+                }),
                 responses: { 200: { description: 'Escalated' } }
             }
         },
-        '/api/bot/interactions/unregistered': {
-            get: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Get unregistered bot interactions (leads)',
-                responses: { 200: { description: 'Success' } }
-            }
-        },
+        '/api/bot/interactions/unregistered': { get: { tags: ['WhatsApp Bot Integration'], summary: 'Get unregistered leads', responses: { 200: { description: 'Success' } } } },
         '/api/bot/chat/log': {
             post: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Log chat message (for registered patients)',
-                requestBody: body({ wa_id: '9876543210', message: 'Hello' }),
+                tags: ['WhatsApp Bot Integration'], summary: 'Log ANY chat raw',
+                requestBody: body({
+                    wa_id: '9876543210',
+                    message: 'Hello, I want to book an appointment for my daughter Sia'
+                }),
                 responses: { 201: { description: 'Logged' } }
             }
         },
-        '/api/bot/chat/history/{wa_id}': {
-            get: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Get last 10 chat messages',
-                parameters: [pathParam('wa_id', '9876543210')],
-                responses: { 200: { description: 'History' } }
-            }
-        },
+        '/api/bot/chat/history/{wa_id}': { get: { tags: ['WhatsApp Bot Integration'], summary: 'Session history (enriched)', parameters: [pathParam('wa_id', '9876543210')], responses: { 200: { description: 'History' } } } },
 
         // ══ SYSTEM ════════════════════════════════════════════════════════════
-        '/api/system/health': {
-            get: { tags: ['System'], summary: 'Health check', responses: { 200: { description: 'Success' } } }
-        },
+        '/api/system/health': { get: { tags: ['System'], summary: 'Health check', responses: { 200: { description: 'Healthy' } } } },
         '/api/config': {
-            get: { tags: ['System'], summary: 'Get clinic system configuration', responses: { 200: { description: 'Success' } } },
-            patch: {
-                tags: ['System'], summary: 'Update clinic system configuration',
-                requestBody: body({ clinic_name: 'Dr. Indu Child Care' }, false),
-                responses: { 200: { description: 'Updated' } }
-            }
+            get: { tags: ['System'], summary: 'Get system settings', responses: { 200: { description: 'Success' } } },
+            patch: { tags: ['System'], summary: 'Update system settings', requestBody: body({ clinic_name: 'DICC' }, false), responses: { 200: { description: 'Updated' } } }
         },
-        '/api/audit/logs': {
-            get: {
-                tags: ['System'], summary: 'Get system audit logs',
-                parameters: [queryParam('page', '1'), queryParam('limit', '50')],
-                responses: { 200: { description: 'Success' } }
-            }
-        }
+        '/api/audit/logs': { get: { tags: ['System'], summary: 'Get system audit logs', responses: { 200: { description: 'Logs list' } } } },
+        '/api/notifications': { get: { tags: ['System'], summary: 'List notifications', responses: { 200: { description: 'Success' } } } },
+        '/api/notifications/{id}/mark-read': { patch: { tags: ['System'], summary: 'Mark alert read', parameters: [pathParam('id', 'N1')], responses: { 200: { description: 'Success' } } } },
+        '/api/reminders/schedule': { post: { tags: ['System'], summary: 'Schedule a manual reminder', requestBody: body({ appointment_id: 'APT1' }), responses: { 201: { description: 'Scheduled' } } } },
+
+        // ══ REPORTS ═══════════════════════════════════════════════════════════
+        '/api/reports/dashboard': { get: { tags: ['Reports & Analytics'], summary: 'Overview metrics', responses: { 200: { description: 'Daily stats' } } } },
+        '/api/reports/appointments': { get: { tags: ['Reports & Analytics'], summary: 'Appointment list report', parameters: [queryParam('from', '2026-06-01'), queryParam('to', '2026-06-15')], responses: { 200: { description: 'Success' } } } },
     }
 };
 
@@ -498,6 +615,5 @@ module.exports = (app) => {
             filter: true,
         }
     }));
-    //console.log('📚 Swagger docs (Local) → http://localhost:5000/api-docs');
-    console.log('📚 Swagger docs (Prod)  → https://api-dr-indu-child-care.brahmaastra.ai/api-docs');
+    console.log('📚 Swagger docs (Local) → http://localhost:5000/api-docs');
 };

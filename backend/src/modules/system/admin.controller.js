@@ -8,7 +8,9 @@ const ROLE_MAP = {
     superadmin: 'superadmin',
     super_admin: 'superadmin',
     admin: 'admin',
-    staff: 'staff'
+    staff: 'staff',
+    secretary: 'secretary',
+    doctor: 'doctor'
 };
 
 function normalizeRole(role) {
@@ -61,13 +63,16 @@ exports.login = async (req, res) => {
             if (err) throw err;
             res.json({
                 success: true,
-                token,
+                access_token: token,
+                token_type: 'Bearer',
+                expires_in: 86400,
                 user: {
-                    user_id: admin._id,
+                    id: admin._id,
                     username: admin.username,
-                    email: admin.email,
                     role: admin.role,
-                    full_name: admin.full_name
+                    full_name: admin.full_name,
+                    email: admin.email,
+                    permissions: admin.permissions || []
                 }
             });
         });
@@ -77,13 +82,33 @@ exports.login = async (req, res) => {
     }
 };
 
-// @desc    Get all admin users
+// @desc    Get all admin users (with pagination + filters)
 // @route   GET /api/admin/users
 // @access  Private (SUPER_ADMIN / ADMIN)
 exports.getAdmins = async (req, res) => {
     try {
-        const admins = await Admin.find().select('-password_hash').sort({ created_at: -1 });
-        res.json({ success: true, data: admins });
+        const { page = 1, limit = 50, role, is_active, search } = req.query;
+
+        const filter = {};
+        if (role) filter.role = role;
+        if (is_active !== undefined) filter.is_active = is_active === 'true';
+        if (search) filter.$or = [
+            { username: { $regex: search, $options: 'i' } },
+            { full_name: { $regex: search, $options: 'i' } },
+            { email: { $regex: search, $options: 'i' } }
+        ];
+
+        const skip = (Number(page) - 1) * Number(limit);
+        const [admins, total] = await Promise.all([
+            Admin.find(filter).select('-password_hash').sort({ created_at: -1 }).skip(skip).limit(Number(limit)),
+            Admin.countDocuments(filter)
+        ]);
+
+        res.json({
+            success: true,
+            data: admins,
+            pagination: { page: Number(page), limit: Number(limit), total, pages: Math.ceil(total / Number(limit)) }
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -94,13 +119,13 @@ exports.getAdmins = async (req, res) => {
 // @access  Private (SUPER_ADMIN)
 exports.createAdmin = async (req, res) => {
     try {
-        const { username, email, password, full_name, role } = req.body || {};
+        const { username, email, password, full_name, role, permissions } = req.body || {};
         const normalizedRole = normalizeRole(role);
 
         if (!normalizedRole) {
             return res.status(400).json({
                 success: false,
-                message: 'Invalid role. Allowed roles: superadmin, admin, staff'
+                message: 'Invalid role. Allowed roles: superadmin, admin, staff, secretary, doctor'
             });
         }
 
@@ -114,7 +139,8 @@ exports.createAdmin = async (req, res) => {
             email,
             password_hash: password, // Pre-save hook will hash it
             full_name,
-            role: normalizedRole
+            role: normalizedRole,
+            permissions: permissions || []
         });
 
         await admin.save();
@@ -144,47 +170,39 @@ exports.createAdmin = async (req, res) => {
 };
 
 // @desc    Update an admin user
-// @route   PATCH /api/admin/users/:id
+// @route   PATCH /api/admin/users/:user_id
 // @access  Private (SUPER_ADMIN)
 exports.updateAdmin = async (req, res) => {
     try {
-        const { full_name, role, is_active, email } = req.body || {};
-        const { id } = req.params;
-        if (!mongoose.Types.ObjectId.isValid(id)) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid admin user id'
-            });
+        const { full_name, role, is_active, email, permissions } = req.body || {};
+        const { user_id } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(user_id)) {
+            return res.status(400).json({ success: false, message: 'Invalid admin user id' });
         }
 
-        const admin = await Admin.findById(id);
-
+        const admin = await Admin.findById(user_id);
         if (!admin) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
         const old_value = { full_name: admin.full_name, role: admin.role, is_active: admin.is_active, email: admin.email };
 
-        // Build update object — use direct DB update to avoid re-triggering bcrypt hook
         const updateFields = {};
         if (full_name !== undefined) updateFields.full_name = full_name;
         if (email !== undefined) updateFields.email = email;
         if (role !== undefined) {
             const normalizedRole = normalizeRole(role);
             if (!normalizedRole) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Invalid role. Allowed roles: superadmin, admin, staff'
-                });
+                return res.status(400).json({ success: false, message: 'Invalid role. Allowed roles: superadmin, admin, staff' });
             }
             updateFields.role = normalizedRole;
         }
         if (is_active !== undefined) updateFields.is_active = is_active;
+        if (permissions !== undefined) updateFields.permissions = permissions;
 
         await Admin.updateOne({ _id: admin._id }, { $set: updateFields });
-        Object.assign(admin, updateFields); // sync local object
-
-        const new_value = { full_name: admin.full_name, role: admin.role, is_active: admin.is_active, email: admin.email };
+        Object.assign(admin, updateFields);
 
         await audit({
             event_type: 'ADMIN_USER_UPDATED',
@@ -193,10 +211,89 @@ exports.updateAdmin = async (req, res) => {
             actor: req.user ? req.user.username : 'SYSTEM',
             actor_type: req.user ? req.user.role : 'SUPER_ADMIN',
             old_value,
-            new_value
+            new_value: updateFields
         });
 
-        res.json({ success: true, data: admin });
+        res.json({ success: true, message: 'User updated successfully', data: admin });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Delete/deactivate admin user (soft delete)
+// @route   DELETE /api/admin/users/:user_id
+// @access  Private (SUPER_ADMIN)
+exports.deleteAdmin = async (req, res) => {
+    try {
+        const { user_id } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(user_id)) {
+            return res.status(400).json({ success: false, message: 'Invalid admin user id' });
+        }
+
+        const admin = await Admin.findById(user_id);
+        if (!admin) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        // Soft delete — deactivate
+        await Admin.updateOne({ _id: admin._id }, { $set: { is_active: false } });
+
+        await audit({
+            event_type: 'ADMIN_USER_DELETED',
+            entity_type: 'admin_user',
+            entity_id: String(admin._id),
+            actor: req.user ? req.user.username : 'SYSTEM',
+            actor_type: req.user ? req.user.role : 'SUPER_ADMIN',
+            new_value: { deleted: true }
+        });
+
+        res.json({ success: true, message: 'User deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Get current admin profile
+// @route   GET /api/admin/profile
+// @access  Private
+exports.getProfile = async (req, res) => {
+    try {
+        const admin = await Admin.findById(req.user.id).select('-password_hash');
+        if (!admin) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+        res.json({
+            success: true,
+            data: {
+                id: admin._id,
+                username: admin.username,
+                email: admin.email,
+                full_name: admin.full_name,
+                role: admin.role,
+                is_active: admin.is_active,
+                last_login_at: admin.last_login_at,
+                permissions: admin.permissions || []
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Update current admin profile
+// @route   PATCH /api/admin/profile
+// @access  Private
+exports.updateProfile = async (req, res) => {
+    try {
+        const { full_name, email } = req.body || {};
+        const updateFields = {};
+        if (full_name !== undefined) updateFields.full_name = full_name;
+        if (email !== undefined) updateFields.email = email;
+
+        await Admin.updateOne({ _id: req.user.id }, { $set: updateFields });
+
+        res.json({ success: true, message: 'Profile updated successfully' });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

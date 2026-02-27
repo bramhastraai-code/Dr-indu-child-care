@@ -47,16 +47,27 @@ exports.addMRDEntry = async (req, res) => {
             clinical_notes,
             diagnosis,
             prescription,
+            advice,
             investigations,
             next_visit_due,
             vaccine_given,
             vaccine_batch,
-            recorded_by
+            recorded_by,
+            weight,
+            height,
+            temperature,
+            spo2,
+            pulse,
+            head_circumference,
+            symptoms,
+            attachments
         } = req.body || {};
 
-        if (!patient_id || !recorded_by) {
-            return res.status(400).json({ success: false, message: 'patient_id and recorded_by are required' });
+        if (!patient_id) {
+            return res.status(400).json({ success: false, message: 'patient_id is required' });
         }
+
+        const finalRecordedBy = recorded_by || req.user?.username || 'DOCTOR';
 
         // 1. Validate Appointment if provided
         let appointment = null;
@@ -91,12 +102,21 @@ exports.addMRDEntry = async (req, res) => {
             clinical_notes,
             diagnosis,
             prescription,
+            advice,
             investigations,
             next_visit_due: next_visit_due ? new Date(next_visit_due) : null,
             vaccine_given,
             vaccine_batch,
-            recorded_by,
-            recorded_at: new Date()
+            recorded_by: finalRecordedBy,
+            recorded_at: new Date(),
+            weight,
+            height,
+            temperature,
+            spo2,
+            pulse,
+            head_circumference,
+            symptoms: Array.isArray(symptoms) ? symptoms : [],
+            attachments: Array.isArray(attachments) ? attachments : []
         };
 
         mrd.entries.unshift(newEntry);
@@ -105,7 +125,7 @@ exports.addMRDEntry = async (req, res) => {
         if (appointment_id) {
             await Appointment.findOneAndUpdate(
                 { appointment_id },
-                { status: 'COMPLETED', last_updated_by: recorded_by, last_updated_at: new Date() }
+                { status: 'COMPLETED', last_updated_by: finalRecordedBy, last_updated_at: new Date() }
             );
         }
 
@@ -113,7 +133,7 @@ exports.addMRDEntry = async (req, res) => {
             event_type: 'MRD_ENTRY_CREATED',
             entity_type: 'mrd',
             entity_id: patient_id,
-            actor: recorded_by,
+            actor: finalRecordedBy,
             actor_type: req.user ? req.user.role : 'DOCTOR'
         });
 
@@ -157,9 +177,10 @@ exports.updateMRDEntry = async (req, res) => {
 
         // Update fields if present
         const updateable = [
-            'diagnosis', 'prescription', 'clinical_notes',
+            'diagnosis', 'prescription', 'advice', 'clinical_notes',
             'chief_complaint', 'investigations', 'next_visit_due',
-            'vaccine_given', 'vaccine_batch'
+            'vaccine_given', 'vaccine_batch',
+            'weight', 'height', 'temperature', 'spo2', 'pulse', 'head_circumference', 'symptoms', 'attachments'
         ];
 
         updateable.forEach(f => {
@@ -218,6 +239,124 @@ exports.exportMRD = async (req, res) => {
                 vaccination_history
             }
         });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Update MRD entry by MRD document id
+// @route   PUT /api/mrd/:mrd_id
+exports.updateMRDById = async (req, res) => {
+    // Alias: delegate to updateMRDEntry by treating mrd_id as entry._id
+    req.params.id = req.params.mrd_id;
+    return exports.updateMRDEntry(req, res);
+};
+
+// @desc    Add vaccination record
+// @route   POST /api/mrd/vaccination
+exports.addVaccinationRecord = async (req, res) => {
+    try {
+        const {
+            patient_id,
+            vaccine_name,
+            vaccine_date,
+            dose_number,
+            administered_by,
+            batch_number,
+            next_due_date,
+            site
+        } = req.body || {};
+
+        if (!patient_id || !vaccine_name) {
+            return res.status(400).json({ success: false, message: 'patient_id and vaccine_name are required' });
+        }
+
+        let mrd = await MRD.findOne({ patient_id });
+        if (!mrd) mrd = await MRD.create({ patient_id, entries: [] });
+
+        const vaccinationEntry = {
+            visit_type: 'VACCINATION',
+            visit_date: vaccine_date ? new Date(vaccine_date) : new Date(),
+            vaccine_given: vaccine_name,
+            vaccine_batch: batch_number || null,
+            attending_doctor: administered_by || null,
+            recorded_by: req.user?.username || administered_by || 'DOCTOR',
+            recorded_at: new Date(),
+            // Store extra vaccination details in clinical_notes
+            clinical_notes: JSON.stringify({
+                dose_number: dose_number || 1,
+                next_due_date: next_due_date || null,
+                site: site || null
+            })
+        };
+
+        mrd.entries.unshift(vaccinationEntry);
+        await mrd.save();
+
+        await audit({
+            event_type: 'VACCINATION_RECORDED',
+            entity_type: 'mrd',
+            entity_id: patient_id,
+            actor: req.user?.username || 'DOCTOR',
+            actor_type: req.user ? req.user.role : 'DOCTOR',
+            new_value: { vaccine_name, vaccine_date, dose_number }
+        });
+
+        res.status(201).json({ success: true, message: 'Vaccination record added' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Lock MRD entry
+// @route   PATCH /api/mrd/entry/:id/lock
+exports.lockMRDEntry = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const mrd = await MRD.findOne({ 'entries._id': id });
+        if (!mrd) return res.status(404).json({ success: false, message: 'Entry not found' });
+
+        const entry = mrd.entries.id(id);
+        entry.is_locked = true;
+        await mrd.save();
+
+        await audit({
+            event_type: 'MRD_ENTRY_LOCKED',
+            entity_type: 'mrd',
+            entity_id: mrd.patient_id,
+            actor: req.user ? req.user.username : 'DOCTOR'
+        });
+
+        res.json({ success: true, message: 'Entry locked successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Upload attachment to MRD entry
+// @route   POST /api/mrd/entry/:id/attachment
+exports.uploadMRDAttachment = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { url, name, file_type } = req.body || {};
+
+        if (!url) return res.status(400).json({ success: false, message: 'url is required (Base64 or Link)' });
+
+        const mrd = await MRD.findOne({ 'entries._id': id });
+        if (!mrd) return res.status(404).json({ success: false, message: 'Entry not found' });
+
+        const entry = mrd.entries.id(id);
+        if (entry.is_locked) return res.status(403).json({ success: false, message: 'Entry is locked' });
+
+        entry.attachments.push({
+            url,
+            name: name || 'attachment',
+            file_type: file_type || 'image/jpeg',
+            uploaded_at: new Date()
+        });
+
+        await mrd.save();
+        res.json({ success: true, message: 'Attachment uploaded', data: entry.attachments });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

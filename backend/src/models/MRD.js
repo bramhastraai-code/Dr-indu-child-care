@@ -45,6 +45,17 @@ const MRDEntrySchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    advice: {
+        type: String,
+        default: null
+    },
+    weight: { type: String, default: null },
+    height: { type: String, default: null },
+    temperature: { type: String, default: null },
+    spo2: { type: String, default: null },
+    pulse: { type: String, default: null },
+    head_circumference: { type: String, default: null },
+    symptoms: { type: [String], default: [] },
     next_visit_due: {
         type: Date,
         default: null
@@ -76,7 +87,13 @@ const MRDEntrySchema = new mongoose.Schema({
     is_locked: {
         type: Boolean,
         default: false
-    }
+    },
+    attachments: [{
+        url: { type: String, required: true },
+        name: { type: String, default: 'attachment' },
+        file_type: { type: String, default: 'image/jpeg' },
+        uploaded_at: { type: Date, default: Date.now }
+    }]
 });
 
 const MRDSchema = new mongoose.Schema({

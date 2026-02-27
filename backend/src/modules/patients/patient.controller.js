@@ -71,6 +71,7 @@ exports.registerPatient = async (req, res) => {
             mother_mobile,
             mother_email,
             mother_occupation,
+            parent_mobile,              // user request
             communication_preference,
 
             // Section 4 – Contact
@@ -115,7 +116,7 @@ exports.registerPatient = async (req, res) => {
         }
 
         // 2. Resolve WhatsApp ID / Mobile
-        const raw_wa_id = wa_id || mobile || father_mobile || mother_mobile;
+        const raw_wa_id = wa_id || parent_mobile || mobile || father_mobile || mother_mobile;
         if (!raw_wa_id) {
             return res.status(400).json({ success: false, message: 'At least one mobile number is required' });
         }
@@ -151,7 +152,7 @@ exports.registerPatient = async (req, res) => {
             middle_name: middle_name || null,
             last_name: last_name || null,
             gender: gender || null,
-            mothers_name: mothers_name || null,
+            mothers_name: mothers_name || mother_name || null,
             parent_name: parent_name || null,
 
             // Birth
@@ -176,7 +177,7 @@ exports.registerPatient = async (req, res) => {
             father_occupation: father_occupation || null,
 
             // Mother
-            mother_name: mother_name || null,
+            mother_name: mother_name || mothers_name || null,
             mother_mobile: mother_mobile || null,
             mother_email: mother_email || null,
             mother_occupation: mother_occupation || null,
@@ -407,6 +408,146 @@ exports.updatePatient = async (req, res) => {
         });
 
         res.json({ success: true, message: 'Patient updated successfully', data: patient });
+    } catch (err) {
+        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+    }
+};
+
+// @desc    Soft delete patient
+// @route   DELETE /api/patients/:patient_id
+exports.deletePatient = async (req, res) => {
+    try {
+        const { patient_id } = req.params;
+        const actor = req.user ? req.user.username : 'ADMIN';
+
+        const patient = await Patient.findOneAndUpdate(
+            { patient_id, is_deleted: false },
+            { $set: { is_deleted: true, is_active: false, deleted_at: new Date(), deleted_by: actor } },
+            { new: true }
+        );
+
+        if (!patient) {
+            return res.status(404).json({ success: false, error_code: 'PATIENT_NOT_FOUND', message: 'Patient not found' });
+        }
+
+        await audit({
+            event_type: 'PATIENT_DELETED',
+            entity_type: 'patient',
+            entity_id: patient_id,
+            actor,
+            actor_type: req.user ? req.user.role : 'ADMIN'
+        });
+
+        res.json({ success: true, message: 'Patient deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+    }
+};
+
+// @desc    Upload patient photo (Base64 or multipart)
+// @route   PATCH /api/patients/:patient_id/photo
+exports.uploadPatientPhoto = async (req, res) => {
+    try {
+        const { patient_id } = req.params;
+        // Accept base64 string in body.photo or body.patient_photo
+        const { photo, patient_photo } = req.body || {};
+        const photoData = photo || patient_photo;
+
+        if (!photoData) {
+            return res.status(400).json({ success: false, message: 'No photo data provided. Send base64 image in photo field.' });
+        }
+
+        const patient = await Patient.findOneAndUpdate(
+            { patient_id, is_deleted: false },
+            { $set: { photo: photoData, patient_photo: photoData, last_updated_at: new Date() } },
+            { new: true }
+        );
+
+        if (!patient) {
+            return res.status(404).json({ success: false, error_code: 'PATIENT_NOT_FOUND', message: 'Patient not found' });
+        }
+
+        res.json({ success: true, message: 'Photo uploaded successfully', photo_url: photoData });
+    } catch (err) {
+        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+    }
+};
+
+// @desc    Export patients to CSV
+// @route   GET /api/patients/export/csv
+exports.exportPatientsCsv = async (req, res) => {
+    try {
+        const { date_from, date_to, city, gender, doctor } = req.query;
+
+        const filter = { is_deleted: false };
+        if (city) filter.city = new RegExp(city, 'i');
+        if (gender) filter.gender = gender;
+        if (doctor) filter.doctor = new RegExp(doctor, 'i');
+        if (date_from || date_to) {
+            filter.registered_at = {};
+            if (date_from) filter.registered_at.$gte = new Date(date_from);
+            if (date_to) filter.registered_at.$lte = new Date(date_to);
+        }
+
+        const patients = await Patient.find(filter).select('-password_hash -wa_hash -photo -patient_photo').lean();
+
+        // Build CSV
+        const fields = ['patient_id', 'child_name', 'gender', 'dob', 'father_name', 'mother_name', 'area', 'city', 'state', 'email', 'doctor', 'registration_source', 'is_active', 'registered_at'];
+        const header = fields.join(',');
+        const rows = patients.map(p =>
+            fields.map(f => {
+                const val = p[f];
+                if (val === null || val === undefined) return '';
+                if (val instanceof Date) return val.toISOString();
+                return `"${String(val).replace(/"/g, '""')}"`;
+            }).join(',')
+        );
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename="patients.csv"');
+        res.send([header, ...rows].join('\n'));
+    } catch (err) {
+        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+    }
+};
+
+// @desc    Patient statistics
+// @route   GET /api/patients/stats
+exports.getPatientStats = async (req, res) => {
+    try {
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfWeek = new Date(now);
+        startOfWeek.setDate(now.getDate() - now.getDay());
+
+        const [total, active, inactive, byGender, byCity, byDoctor, bySources, newMonth, newWeek] = await Promise.all([
+            Patient.countDocuments({ is_deleted: false }),
+            Patient.countDocuments({ is_deleted: false, is_active: true }),
+            Patient.countDocuments({ is_deleted: false, is_active: false }),
+            Patient.aggregate([{ $match: { is_deleted: false } }, { $group: { _id: '$gender', count: { $sum: 1 } } }]),
+            Patient.aggregate([{ $match: { is_deleted: false } }, { $group: { _id: '$city', count: { $sum: 1 } } }]),
+            Patient.aggregate([{ $match: { is_deleted: false } }, { $group: { _id: '$doctor', count: { $sum: 1 } } }]),
+            Patient.aggregate([{ $match: { is_deleted: false } }, { $group: { _id: '$registration_source', count: { $sum: 1 } } }]),
+            Patient.countDocuments({ is_deleted: false, registered_at: { $gte: startOfMonth } }),
+            Patient.countDocuments({ is_deleted: false, registered_at: { $gte: startOfWeek } }),
+        ]);
+
+        const toObj = (arr) => arr.reduce((acc, { _id, count }) => { if (_id) acc[_id] = count; return acc; }, {});
+
+        res.json({
+            success: true,
+            data: {
+                total_patients: total,
+                active_patients: active,
+                inactive_patients: inactive,
+                by_gender: toObj(byGender),
+                by_city: toObj(byCity),
+                by_doctor: toObj(byDoctor),
+                registration_sources: toObj(bySources),
+                new_this_month: newMonth,
+                new_this_week: newWeek
+            }
+        });
     } catch (err) {
         res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
     }

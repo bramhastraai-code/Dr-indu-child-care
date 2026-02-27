@@ -256,7 +256,77 @@ exports.deleteDoctor = async (req, res) => {
             new_value: { deleted: true, name: doctorName }
         });
 
-        res.json({ success: true, message: 'Doctor deleted and removed from slots' });
+        res.json({ success: true, message: 'Doctor deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// GET /api/doctors/:doctor_id/schedule
+exports.getDoctorSchedule = async (req, res) => {
+    try {
+        const doctor = await Doctor.findOne({ doctor_id: req.params.doctor_id });
+        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+
+        // Build schedule from slot templates (days_by_doctor map)
+        const safeName = doctor.name.replace(/\./g, '');
+        const allSlots = await Slot.find({ is_active: true }).sort({ sort_order: 1, start_time: 1 });
+
+        const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        const schedule = {};
+        days.forEach(d => schedule[d] = []);
+
+        for (const slot of allSlots) {
+            const doctorDays = slot.days_by_doctor?.get(safeName) || slot.days_by_doctor?.get(doctor.name) || [];
+            doctorDays.forEach(dayIndex => {
+                if (dayIndex >= 0 && dayIndex <= 6) {
+                    schedule[days[dayIndex]].push({
+                        slot_id: slot.slot_id,
+                        label: slot.slot_label,
+                        start: slot.start_time,
+                        end: slot.end_time,
+                        session: slot.session
+                    });
+                }
+            });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                doctor_id: doctor.doctor_id,
+                name: doctor.name,
+                availability: doctor.availability || schedule
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// PATCH /api/doctors/:doctor_id/schedule
+exports.updateDoctorSchedule = async (req, res) => {
+    try {
+        const { availability } = req.body || {};
+        if (!availability) {
+            return res.status(400).json({ success: false, message: 'availability is required' });
+        }
+
+        const doctor = await Doctor.findOne({ doctor_id: req.params.doctor_id });
+        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+
+        await Doctor.updateOne({ doctor_id: req.params.doctor_id }, { $set: { availability } });
+
+        await audit({
+            event_type: 'DOCTOR_SCHEDULE_UPDATED',
+            entity_type: 'doctor',
+            entity_id: req.params.doctor_id,
+            actor: req.user?.username || 'ADMIN',
+            actor_type: 'ADMIN',
+            new_value: { availability }
+        });
+
+        res.json({ success: true, message: 'Schedule updated successfully' });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

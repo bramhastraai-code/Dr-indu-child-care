@@ -7,11 +7,11 @@ const optionalInt = () => Joi.number().integer().min(0).allow(null);
 
 // ── Personal block (shared between register & update) ─────────
 const personalFields = {
-    salutation: Joi.string().valid('Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Master', 'Miss').allow('', null),
+    salutation: Joi.string().valid('Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Master', 'Miss').insensitive().allow('', null),
     first_name: optionalStr().max(100),
     middle_name: optionalStr().max(100),
     last_name: optionalStr().max(100),
-    gender: Joi.string().valid('Male', 'Female', 'Other').allow(null),
+    gender: Joi.string().valid('Male', 'Female', 'Other').insensitive().allow(null),
     mothers_name: optionalStr().max(100),
 
     // Birth details
@@ -46,7 +46,7 @@ const guardianFields = {
 
     communication_preference: Joi.alternatives().try(
         Joi.boolean(),
-        Joi.string().valid('Father', 'Mother', 'Both', 'WhatsApp', 'Email', 'SMS').allow('', null)
+        Joi.string().valid('Father', 'Mother', 'Both', 'WhatsApp', 'Email', 'SMS').insensitive().allow('', null)
     ),
 };
 
@@ -82,6 +82,7 @@ const additionalFields = {
 const enrollmentFields = {
     enrollment_option: Joi.string()
         .valid('just_enroll', 'send_to_specific')
+        .insensitive()
         .allow(null)
         .default('just_enroll'),
     send_to_specific: Joi.boolean().default(false),
@@ -101,6 +102,7 @@ const patientSchemas = {
             Joi.string().allow('', null)
         ).required().label('WhatsApp ID / Mobile'),
         mobile: Joi.string().trim().allow('', null),      // fallback alias
+        parent_mobile: Joi.string().trim().allow('', null), // user request
         registration_source: Joi.string()
             .valid('whatsapp', 'form', 'dashboard', 'api')
             .default('dashboard'),

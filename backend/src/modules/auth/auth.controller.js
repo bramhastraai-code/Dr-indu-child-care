@@ -184,3 +184,35 @@ exports.logout = async (req, res) => {
         res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
     }
 };
+
+/**
+ * @desc    Change admin password
+ * @route   POST /api/auth/change-password
+ */
+exports.changePassword = async (req, res) => {
+    try {
+        const { old_password, new_password } = req.body || {};
+
+        if (!old_password || !new_password) {
+            return res.status(400).json({ success: false, error_code: 'VALIDATION_ERROR', message: 'old_password and new_password are required' });
+        }
+
+        const admin = await Admin.findById(req.user.id);
+        if (!admin) {
+            return res.status(404).json({ success: false, error_code: 'NOT_FOUND', message: 'User not found' });
+        }
+
+        const isMatch = await admin.comparePassword(old_password);
+        if (!isMatch) {
+            return res.status(400).json({ success: false, error_code: 'INVALID_CREDENTIALS', message: 'Old password is incorrect' });
+        }
+
+        // Set new password — pre-save hook will hash it
+        admin.password_hash = new_password;
+        await admin.save();
+
+        res.json({ success: true, message: 'Password updated successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+    }
+};

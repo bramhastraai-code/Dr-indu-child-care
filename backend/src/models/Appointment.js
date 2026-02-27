@@ -90,6 +90,19 @@ const AppointmentSchema = new mongoose.Schema({
     cancelled_by: { type: String, default: null },  // 'whatsapp' | 'dashboard' | 'system'
     cancellation_reason: { type: String, default: null },
     secretary_notes: { type: String, default: null },
+    // ── Token / Queue System ──────────────────────────────────────────
+    // Daily sequential token number per doctor (e.g. 1, 2, 3...)
+    token_number: { type: Number, default: null, index: true },
+    // WAITING = in queue, IN_PROGRESS = being seen, COMPLETED, SKIPPED
+    token_status: {
+        type: String,
+        enum: ['WAITING', 'IN_PROGRESS', 'COMPLETED', 'SKIPPED', null],
+        default: null
+    },
+    // When the patient physically checked in at clinic
+    check_in_time: { type: Date, default: null },
+    // When this token was called to see the doctor
+    called_at: { type: Date, default: null },
     is_deleted: {
         type: Boolean,
         default: false,

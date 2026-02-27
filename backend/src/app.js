@@ -23,7 +23,7 @@ app.use(helmet({
 }));
 
 // Body parser
-app.use(express.json({ limit: '2mb' })); // Allow Base64 photo uploads
+app.use(express.json({ limit: '10mb' })); // Allow Base64 photo and attachment uploads
 app.use(cookieParser());
 
 // Dev logging middleware
@@ -57,6 +57,15 @@ app.use('/api/system', require('./modules/system/system.routes'));
 app.use('/api/config', require('./modules/system/config.routes'));
 app.use('/api/audit', require('./modules/system/audit.routes'));
 app.use('/api/doctors', require('./modules/doctors/doctor.routes'));
+app.use('/api/doctor', require('./modules/doctors/availability.routes'));
+
+// New modules v1.1.0
+app.use('/api/notifications', require('./modules/system/notifications.routes'));
+app.use('/api/reminders', require('./modules/system/reminders.routes'));
+app.use('/api/reports', require('./modules/system/reports.routes'));
+
+// Messaging (doctor alerts, appointment notifications, token reminders)
+app.use('/api/messages', require('./modules/whatsapp/whatsapp.routes'));
 
 // Setup Swagger
 setupSwagger(app);

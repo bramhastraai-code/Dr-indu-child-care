@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { login, refreshToken, logout } = require('./auth.controller');
+const { login, refreshToken, logout, changePassword } = require('./auth.controller');
 
-// Token endpoint: use refreshToken handler for issuing new access tokens
-router.post('/token', refreshToken);
-
-// Expose login/logout for convenience (admin login routes also exist under /api/admin)
+// All auth endpoints — public (no auth required)
 router.post('/login', login);
+router.post('/refresh', refreshToken);
+router.post('/token', refreshToken);   // legacy alias
 router.post('/logout', logout);
+router.post('/change-password', changePassword);
 
 module.exports = router;

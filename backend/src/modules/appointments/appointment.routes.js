@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+
 const {
     getAppointments,
     createAppointment,
@@ -9,133 +10,73 @@ const {
     getAppointmentById,
     updateAppointment,
     cancelAppointment,
+    completeAppointment,
+    markNoShow,
     getTodayAppointments,
     bookByWhatsapp,
     bookByForm,
     getPending24hReminders,
+    getPending2hReminders,
     markReminderSent
 } = require('./appointment.controller');
+
+const {
+    bookWithToken,
+    checkIn,
+    getDailyTokens,
+    getClinicDisplay,
+    getNextToken,
+    updateTokenStatus,
+    getTokenStatus,
+    autoReschedule
+} = require('./token.controller');
 
 const validate = require('../../middleware/validate');
 const { create, bookWhatsapp, update } = require('./appointment.validator');
 const Joi = require('joi');
 
-
-
-
-/**
- * @openapi
- * tags:
- *   - name: Appointments
- *     description: Appointment booking, cancellation, rescheduling and lookup
- */
-
-// All routes are now public for external integrations like n8n
-router.post('/form', validate(create.keys({ wa_id: Joi.string().regex(/^\d{10}$/).required(), patient_id: Joi.optional(), mobile: Joi.optional() })), bookByForm);
-router.get('/by-wa/:wa_id', getAppointmentsByWaId);
-router.get('/by-mobile/:wa_id', getAppointmentsByWaId); // Alias
+// ── Public / Bot routes ──────────────────────────────────────────────
+router.post('/form', validate(create.keys({
+    wa_id: Joi.string().optional(),
+    patient_id: Joi.optional(),
+    mobile: Joi.optional(),
+    visit_type: Joi.string().optional()
+})), bookByForm);
 router.post('/whatsapp', validate(bookWhatsapp), bookByWhatsapp);
+router.get('/by-wa/:wa_id', getAppointmentsByWaId);
+router.get('/by-mobile/:wa_id', getAppointmentsByWaId);
+
+// ── Static routes (must come BEFORE /:appointment_id) ───────────────
+// Reminder endpoints
 router.get('/reminders/pending-24h', getPending24hReminders);
+router.get('/reminders/pending-2h', getPending2hReminders);
 router.patch('/reminders/:appointment_id/mark-sent', markReminderSent);
 
-/**
- * @openapi
- * /api/appointments/stats:
- *   get:
- *     summary: Appointment stats for a given date (defaults to today)
- *     tags: [Appointments]
- */
+// Stats & summary
 router.get('/stats', getAppointmentStats);
-
-/**
- * @openapi
- * /api/appointments/today:
- *   get:
- *     summary: All appointments for today (shortcut)
- *     tags: [Appointments]
- */
 router.get('/today', getTodayAppointments);
 
-/**
- * @openapi
- * /api/appointments:
- *   get:
- *     summary: List appointments with filters
- *     tags: [Appointments]
- */
-router.get('/', getAppointments);
+// ── Token / Queue System ─────────────────────────────────────────────
+router.post('/book-with-token', bookWithToken);
+router.get('/daily-tokens', getDailyTokens);
+router.get('/clinic-display', getClinicDisplay);
+router.post('/auto-reschedule', autoReschedule);
 
-/**
- * @openapi
- * /api/appointments:
- *   post:
- *     summary: Book a new appointment (all channels)
- *     tags: [Appointments]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - patient_id
- *               - doctor_name
- *               - visit_type
- *               - appointment_date
- *               - slot_id
- *             properties:
- *               patient_id:
- *                 type: string
- *               doctor_id:
- *                 type: string
- *               doctor_name:
- *                 type: string
- *               doctor_speciality:
- *                 type: string
- *               visit_type:
- *                 type: string
- *                 enum: [VACCINATION, CONSULTATION, PULMONARY, FOLLOWUP]
- *               appointment_date:
- *                 type: string
- *                 format: date
- *               slot_id:
- *                 type: string
- *               appointment_mode:
- *                 type: string
- *                 enum: [ONLINE, OFFLINE]
- *               reason:
- *                 type: string
- *               booking_source:
- *                 type: string
- *                 enum: [dashboard, whatsapp, form, api]
- */
+// Token param routes (before /:appointment_id)
+router.get('/next-token/:doctor_id', getNextToken);
+router.post('/token/:token/check-in', checkIn);
+router.patch('/token/:token/status', updateTokenStatus);
+router.get('/token-status/:token', getTokenStatus);
+
+// ── Core CRUD ────────────────────────────────────────────────────────
+router.get('/', getAppointments);
 router.post('/', validate(create), createAppointment);
 
-/**
- * @openapi
- * /api/appointments/{appointment_id}:
- *   get:
- *     summary: Get a single appointment by ID
- *     tags: [Appointments]
- */
+// ── Appointment-specific routes ──────────────────────────────────────
 router.get('/:appointment_id', getAppointmentById);
-
-/**
- * @openapi
- * /api/appointments/{appointment_id}:
- *   patch:
- *     summary: Update / reschedule an appointment
- *     tags: [Appointments]
- */
 router.patch('/:appointment_id', validate(update), updateAppointment);
-
-/**
- * @openapi
- * /api/appointments/{appointment_id}/cancel:
- *   patch:
- *     summary: Cancel an appointment (dashboard or WhatsApp bot)
- *     tags: [Appointments]
- */
 router.patch('/:appointment_id/cancel', cancelAppointment);
+router.patch('/:appointment_id/complete', completeAppointment);
+router.patch('/:appointment_id/no-show', markNoShow);
 
 module.exports = router;
