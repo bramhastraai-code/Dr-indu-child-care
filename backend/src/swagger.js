@@ -54,8 +54,8 @@ const spec = {
         `,
     },
     servers: [
-        { url: 'http://localhost:5000/', description: 'Local Development' },
-        { url: 'https://api-dr-indu-child-care.brahmaastra.ai/', description: 'Production Server' }
+        { url: 'https://api-dr-indu-child-care.brahmaastra.ai/', description: 'Production Server' },
+        //{ url: 'http://localhost:5000/', description: 'Local Development' }
     ],
     components: {},
     security: [],
@@ -615,5 +615,6 @@ module.exports = (app) => {
             filter: true,
         }
     }));
-    console.log('📚 Swagger docs (Local) → http://localhost:5000/api-docs');
+    console.log('📚 Swagger docs (Prod)  → https://api-dr-indu-child-care.brahmaastra.ai/api-docs');
+    //console.log('📚 Swagger docs (Local) → http://localhost:5000/api-docs');
 };
