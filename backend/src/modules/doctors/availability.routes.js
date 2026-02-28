@@ -9,6 +9,9 @@ const {
     getLateCheckins,
     getAvailabilityDashboard
 } = require('./availability.controller');
+const auth = require('../../middleware/auth');
+
+router.use(auth);
 
 // ── Doctor Availability & Queue ─────────────────────────────────────────────
 // All public (no auth)

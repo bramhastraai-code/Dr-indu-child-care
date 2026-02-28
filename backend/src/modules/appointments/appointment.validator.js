@@ -18,6 +18,8 @@ const appointmentSchemas = {
     // POST /api/appointments/whatsapp
     bookWhatsapp: Joi.object({
         wa_id: Joi.string().trim().required(),
+        patient_id: Joi.string().trim().allow('', null), // Used to resolve between siblings
+        child_name: Joi.string().trim().allow('', null), // Optional hint
         doctor_name: Joi.string().trim().min(2).required(),
         doctor_id: Joi.string().trim(),
         doctor_speciality: Joi.string().trim().allow('', null),

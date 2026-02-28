@@ -6,6 +6,7 @@ const Doctor = require('../../models/Doctor');
 const audit = require('../../utils/audit');
 const { toMidnight, normalizeWaId, normalizePhone } = require('../../utils/helpers');
 const { hashField } = require('../../utils/encryption');
+const { generateAppointmentId } = require('./appointment.controller');
 
 // Helper: generate next token number for a doctor on a given date
 const getNextToken = async (doctor_id, date) => {
@@ -68,11 +69,7 @@ exports.bookWithToken = async (req, res) => {
         }
 
         // Generate IDs
-        const year = new Date().getFullYear();
-        const prefix = `APT-${year}-`;
-        const lastAppt = await Appointment.findOne({ appointment_id: { $regex: `^${prefix}` } }).sort({ appointment_id: -1 });
-        const seq = lastAppt ? parseInt(lastAppt.appointment_id.replace(prefix, ''), 10) + 1 : 1;
-        const appointment_id = `${prefix}${seq.toString().padStart(5, '0')}`;
+        const appointment_id = await generateAppointmentId();
 
         const token_number = await getNextToken(doctor.doctor_id, queryDate);
 
@@ -131,8 +128,11 @@ exports.checkIn = async (req, res) => {
         const { doctor_id, date } = req.body || {};
         const queryDate = toMidnight(date || new Date());
 
-        const filter = { token_number: parseInt(token), appointment_date: queryDate };
-        if (doctor_id) filter.doctor_id = doctor_id;
+        if (!doctor_id) {
+            return res.status(400).json({ success: false, message: 'doctor_id is required' });
+        }
+
+        const filter = { token_number: parseInt(token), appointment_date: queryDate, doctor_id };
 
         const appt = await Appointment.findOneAndUpdate(
             filter,
@@ -317,8 +317,12 @@ exports.updateTokenStatus = async (req, res) => {
         }
 
         const queryDate = toMidnight(date || new Date());
-        const filter = { token_number: parseInt(token), appointment_date: queryDate };
-        if (doctor_id) filter.doctor_id = doctor_id;
+
+        if (!doctor_id) {
+            return res.status(400).json({ success: false, message: 'doctor_id is required' });
+        }
+
+        const filter = { token_number: parseInt(token), appointment_date: queryDate, doctor_id };
 
         const updateFields = { token_status: status, last_updated_at: new Date() };
         if (status === 'IN_PROGRESS') updateFields.called_at = new Date();
@@ -347,10 +351,12 @@ exports.getTokenStatus = async (req, res) => {
     try {
         const { token } = req.params;
         const { doctor_id, date } = req.query;
+        if (!doctor_id) {
+            return res.status(400).json({ success: false, message: 'doctor_id is required' });
+        }
         const queryDate = toMidnight(date || new Date());
 
-        const filter = { token_number: parseInt(token), appointment_date: queryDate };
-        if (doctor_id) filter.doctor_id = doctor_id;
+        const filter = { token_number: parseInt(token), appointment_date: queryDate, doctor_id };
 
         const appt = await Appointment.findOne(filter).lean();
         if (!appt) return res.status(404).json({ success: false, message: `Token ${token} not found` });
@@ -426,11 +432,7 @@ exports.autoReschedule = async (req, res) => {
         }
 
         // Generate new appointment ID
-        const year = new Date().getFullYear();
-        const prefix = `APT-${year}-`;
-        const lastAppt = await Appointment.findOne({ appointment_id: { $regex: `^${prefix}` } }).sort({ appointment_id: -1 });
-        const seq = lastAppt ? parseInt(lastAppt.appointment_id.replace(prefix, ''), 10) + 1 : 1;
-        const new_appointment_id = `${prefix}${seq.toString().padStart(5, '0')}`;
+        const new_appointment_id = await generateAppointmentId();
 
         const token_number = await getNextToken(appt.doctor_id, targetDate);
 

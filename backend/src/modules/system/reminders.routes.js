@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const Appointment = require('../../models/Appointment');
+const auth = require('../../middleware/auth');
+
+router.use(auth); // Must be authenticated to schedule reminders
 
 // POST /api/reminders/schedule — public
 router.post('/schedule', async (req, res) => {

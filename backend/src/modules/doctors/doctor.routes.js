@@ -11,6 +11,9 @@ const {
 } = require('./doctor.controller');
 const validate = require('../../middleware/validate');
 const { createDoctor: createSchema, updateDoctor: updateSchema } = require('./doctor.validator');
+const auth = require('../../middleware/auth');
+
+router.use(auth);
 
 // All doctor endpoints — public (no auth required)
 router.get('/', getDoctors);

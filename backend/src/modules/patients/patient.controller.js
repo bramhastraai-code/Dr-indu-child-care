@@ -258,8 +258,8 @@ exports.registerFromForm = async (req, res) => {
     return exports.registerPatient(req, res);
 };
 
-// @desc    Lookup patient by mobile
-exports.getPatientByMobile = async (req, res) => {
+// @desc    Lookup patient by wa_id
+exports.getPatientByWaId = async (req, res) => {
     try {
         const raw = req.params.mobile || req.params.wa_id;
         const normalized = normalizeWaId(raw);

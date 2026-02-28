@@ -12,6 +12,9 @@ const {
     updateDailySlot,
     getDoctorSlots
 } = require('./slot.controller');
+const auth = require('../../middleware/auth');
+
+router.use(auth);
 
 // All slot endpoints — public (no auth required)
 router.get('/available', getAvailableSlots);

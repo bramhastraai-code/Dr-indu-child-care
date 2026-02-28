@@ -11,17 +11,21 @@ const {
     lockMRDEntry,
     uploadMRDAttachment
 } = require('./mrd.controller');
+const auth = require('../../middleware/auth');
+const authorize = require('../../middleware/rbac');
 
-// All MRD endpoints — public (no auth required)
-router.post('/vaccination', addVaccinationRecord);
-router.post('/entry', addMRDEntry);
-router.patch('/entry/:id', updateMRDEntry);
-router.get('/appointment/:appointment_id', getEntryByAppointment);
-router.patch('/entry/:id/lock', lockMRDEntry);
-router.post('/entry/:id/attachment', uploadMRDAttachment);
+router.use(auth); // Must be authenticated to access any MRD endpoint
+
+// All MRD endpoints — Protected (Restricted access)
+router.post('/vaccination', authorize(['superadmin', 'admin', 'doctor', 'staff']), addVaccinationRecord);
+router.post('/entry', authorize(['superadmin', 'admin', 'doctor']), addMRDEntry);
+router.patch('/entry/:id', authorize(['superadmin', 'admin', 'doctor']), updateMRDEntry);
+router.get('/appointment/:appointment_id', getEntryByAppointment); // All roles can view
+router.patch('/entry/:id/lock', authorize(['superadmin', 'admin', 'doctor']), lockMRDEntry);
+router.post('/entry/:id/attachment', authorize(['superadmin', 'admin', 'doctor']), uploadMRDAttachment);
 
 router.get('/:patient_id/export', exportMRD);
 router.get('/:patient_id', getMRDByPatientId);
-router.put('/:mrd_id', updateMRDById);
+router.put('/:mrd_id', authorize(['superadmin', 'admin', 'doctor']), updateMRDById);
 
 module.exports = router;

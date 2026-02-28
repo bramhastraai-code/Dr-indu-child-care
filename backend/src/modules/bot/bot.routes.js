@@ -14,6 +14,9 @@ const {
     logChat,
     getChatHistory
 } = require('./bot.controller');
+const auth = require('../../middleware/auth');
+
+router.use(auth);
 
 // ── Public (bot integration) ────────────────────────────────────────
 router.get('/session/:wa_id', getSession);

@@ -6,6 +6,7 @@ const {
     updateConfig,
     getAuditLogs
 } = require('./system.controller');
+const auth = require('../../middleware/auth');
 
 /**
  * @openapi
@@ -15,27 +16,8 @@ const {
  *     tags: [System]
  */
 router.get('/health', getHealth);
-
-/**
- * @openapi
- * /api/system/config:
- *   get:
- *     summary: Fetch system configuration
- *     tags: [System]
- *   put:
- *     summary: Update system configuration
- *     tags: [System]
- */
-router.get('/config', getConfig);
-router.put('/config', updateConfig);
-
-/**
- * @openapi
- * /api/system/audit-logs:
- *   get:
- *     summary: Fetch system audit logs
- *     tags: [System]
- */
-router.get('/audit-logs', getAuditLogs);
+router.get('/config', auth, getConfig);
+router.put('/config', auth, updateConfig);
+router.get('/audit-logs', auth, getAuditLogs);
 
 module.exports = router;

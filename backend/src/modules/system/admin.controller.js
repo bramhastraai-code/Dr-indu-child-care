@@ -193,7 +193,7 @@ exports.updateAdmin = async (req, res) => {
         if (role !== undefined) {
             const normalizedRole = normalizeRole(role);
             if (!normalizedRole) {
-                return res.status(400).json({ success: false, message: 'Invalid role. Allowed roles: superadmin, admin, staff' });
+                return res.status(400).json({ success: false, message: 'Invalid role. Allowed roles: superadmin, admin, staff, secretary, doctor' });
             }
             admin.role = normalizedRole;
         }
@@ -230,7 +230,9 @@ exports.getAvailableRoles = async (req, res) => {
         data: [
             { id: 'superadmin', label: 'Super Admin', description: 'Full system access' },
             { id: 'admin', label: 'Admin', description: 'Clinic management access' },
-            { id: 'staff', label: 'Staff', description: 'Appointment and patient access' }
+            { id: 'staff', label: 'Staff', description: 'Appointment and patient access' },
+            { id: 'secretary', label: 'Secretary', description: 'Reception and scheduling' },
+            { id: 'doctor', label: 'Doctor', description: 'Clinical and MRD access' }
         ]
     });
 };
@@ -360,12 +362,15 @@ exports.updateProfile = async (req, res) => {
 
         if (user_id) {
             admin = await Admin.findById(user_id);
-        } else if (username) {
+        }
+
+        // If not found by ID, try username if provided
+        if (!admin && username) {
             admin = await Admin.findOne({ username });
         }
 
         if (!admin) {
-            return res.status(400).json({ success: false, message: 'Please provide user_id or username to identify which profile to update.' });
+            return res.status(404).json({ success: false, message: 'Admin profile not found. Please provide a valid user_id or username to identify which profile to update.' });
         }
 
         // Verify current password for any update in public mode

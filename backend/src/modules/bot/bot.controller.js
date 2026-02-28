@@ -10,13 +10,12 @@ const { hashField } = require('../../utils/encryption');
 // Helper: normalise wa_id — accept wa_id or wa_number in body
 const getWaId = (body) => body ? normalizeWaId(body.wa_id || body.wa_number) : null;
 
-// Helper: resolve patient by wa_id/mobile with normalized + hash lookup
-const findPatientByWa = async (waId) => {
-    const normalized = normalizeWaId(waId);
+// Helper: resolve patients by wa_id/mobile with normalized + hash lookup
+const findPatientsByWa = async (waId) => {
     const mobile = normalizePhone(waId);
     const mobileHash = hashField(mobile);
 
-    return Patient.findOne({
+    return Patient.find({
         wa_hash: mobileHash,
         is_deleted: false
     });
@@ -51,19 +50,22 @@ exports.createSession = async (req, res) => {
         // Close others
         await BotSession.updateMany({ wa_id, is_active: true }, { is_active: false });
 
-        // Check if patient exists (skip registration if found)
-        const existingPatient = await findPatientByWa(wa_id);
+        // Check if patients exist (handles siblings)
+        const patients = await findPatientsByWa(wa_id);
+        const existingPatient = patients.length > 0 ? patients[0] : null;
 
-        const initialState = existingPatient ? 'S40_MAIN_MENU' : 'S00_WELCOME';
+        const initialState = patients.length > 0 ? 'S40_MAIN_MENU' : 'S00_WELCOME';
 
         const session = await BotSession.create({
             session_id: session_id || `SES-${Date.now()}`,
             wa_id,
-            patient_id: existingPatient ? existingPatient.patient_id : null,
+            patient_id: patients.length === 1 ? patients[0].patient_id : null,
             current_state: initialState,
             session_data: {
                 source: source || 'WATI',
-                existing_patient: !!existingPatient
+                existing_patient: patients.length > 0,
+                is_sibling: patients.length > 1,
+                patient_matches: patients.map(p => ({ patient_id: p.patient_id, child_name: p.child_name }))
             },
             expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000)
         });
@@ -233,8 +235,9 @@ exports.logChat = async (req, res) => {
         }
 
         // Lookup patient — but do NOT gate on this. Log regardless.
-        const patient = await findPatientByWa(target);
-        const is_registered = !!patient;
+        const patients = await findPatientsByWa(target);
+        const is_registered = patients.length > 0;
+        const patient = patients[0] || null;
 
         await BotChatHistory.create({
             wa_id: target,
@@ -242,14 +245,18 @@ exports.logChat = async (req, res) => {
             message,
             sender,          // 'user' | 'bot'
             is_registered,
-            patient_id: patient ? patient.patient_id : null
+            patient_id: (patients.length === 1 && patient) ? patient.patient_id : null,
+            metadata: {
+                matches: patients.map(p => p.patient_id)
+            }
         });
 
         res.status(201).json({
             success: true,
             message: 'Chat logged',
             is_registered,
-            patient_id: patient ? patient.patient_id : null
+            patient_id: (patients.length === 1 && patient) ? patient.patient_id : null,
+            total_matches: patients.length
         });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -264,7 +271,8 @@ exports.getChatHistory = async (req, res) => {
         const limit = Math.min(parseInt(req.query.limit) || 10, 100);
 
         // Try to find patient for enrichment — OK if not found
-        const patient = await findPatientByWa(target);
+        const patients = await findPatientsByWa(target);
+        const patient = patients[0] || null;
 
         const history = await BotChatHistory.find({ wa_id: target })
             .sort({ timestamp: -1 })
@@ -274,8 +282,9 @@ exports.getChatHistory = async (req, res) => {
         res.json({
             success: true,
             wa_id: target,
-            is_registered: !!patient,
-            patient_id: patient ? patient.patient_id : null,
+            is_registered: patients.length > 0,
+            patient_id: patients.length === 1 ? (patient?.patient_id || null) : null,
+            total_matches: patients.length,
             child_name: patient ? (patient.child_name || patient.full_name || null) : null,
             total: history.length,
             data: history

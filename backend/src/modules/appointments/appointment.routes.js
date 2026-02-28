@@ -5,7 +5,6 @@ const {
     getAppointments,
     createAppointment,
     getAppointmentStats,
-    getAppointmentsByMobile,
     getAppointmentsByWaId,
     getAppointmentById,
     updateAppointment,
@@ -34,6 +33,9 @@ const {
 const validate = require('../../middleware/validate');
 const { create, bookWhatsapp, update } = require('./appointment.validator');
 const Joi = require('joi');
+const auth = require('../../middleware/auth');
+
+router.use(auth);
 
 // ── Public / Bot routes ──────────────────────────────────────────────
 router.post('/form', validate(create.keys({
@@ -44,7 +46,6 @@ router.post('/form', validate(create.keys({
 })), bookByForm);
 router.post('/whatsapp', validate(bookWhatsapp), bookByWhatsapp);
 router.get('/by-wa/:wa_id', getAppointmentsByWaId);
-router.get('/by-mobile/:wa_id', getAppointmentsByWaId);
 
 // ── Static routes (must come BEFORE /:appointment_id) ───────────────
 // Reminder endpoints

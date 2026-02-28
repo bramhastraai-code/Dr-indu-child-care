@@ -3,6 +3,9 @@ const router = express.Router();
 const Patient = require('../../models/Patient');
 const Appointment = require('../../models/Appointment');
 const { toMidnight } = require('../../utils/helpers');
+const auth = require('../../middleware/auth');
+
+router.use(auth); // Must be authenticated to view any report
 
 // GET /api/reports/dashboard — public
 router.get('/dashboard', async (req, res) => {

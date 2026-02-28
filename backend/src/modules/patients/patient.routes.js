@@ -4,7 +4,7 @@ const router = express.Router();
 const {
     registerPatient,
     getPatients,
-    getPatientByMobile,
+    getPatientByWaId,
     getPatientById,
     updatePatient,
     deletePatient,
@@ -16,25 +16,25 @@ const {
 } = require('./patient.controller');
 const validate = require('../../middleware/validate');
 const { register, update } = require('./patient.validator');
+const auth = require('../../middleware/auth');
 
-// ── Public / Bot routes ─────────────────────────────────────────────
-router.post('/form', validate(register), registerFromForm);
-router.post('/whatsapp', validate(register), registerFromWhatsapp);
-router.get('/by-wa/:wa_id', getPatientByMobile);
-router.get('/by-mobile/:wa_id', getPatientByMobile);
+// ── Public / Bot routes (Protected by API Key or JWT) ───────────────
+router.post('/form', auth, validate(register), registerFromForm);
+router.post('/whatsapp', auth, validate(register), registerFromWhatsapp);
+router.get('/by-wa/:wa_id', auth, getPatientByWaId);
 
 // ── Static routes (must come BEFORE /:patient_id) ───────────────────
-router.get('/export/csv', exportPatientsCsv);
-router.get('/stats', getPatientStats);
+router.get('/export/csv', auth, exportPatientsCsv);
+router.get('/stats', auth, getPatientStats);
 
 // ── Core CRUD ────────────────────────────────────────────────────────
-router.post('/', validate(register), registerPatient);
-router.get('/', getPatients);
+router.post('/', auth, validate(register), registerPatient);
+router.get('/', auth, getPatients);
 
 // ── Patient-specific routes ──────────────────────────────────────────
-router.get('/:patient_id', getPatientById);
-router.put('/:patient_id', validate(update), updatePatient);
-router.delete('/:patient_id', deletePatient);
-router.patch('/:patient_id/photo', uploadPatientPhoto);
+router.get('/:patient_id', auth, getPatientById);
+router.put('/:patient_id', auth, validate(update), updatePatient);
+router.delete('/:patient_id', auth, deletePatient);
+router.patch('/:patient_id/photo', auth, uploadPatientPhoto);
 
 module.exports = router;

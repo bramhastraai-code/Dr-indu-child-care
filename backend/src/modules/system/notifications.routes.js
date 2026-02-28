@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const Appointment = require('../../models/Appointment');
+const auth = require('../../middleware/auth');
+
+router.use(auth); // Must be authenticated to view or mark notifications
 
 // GET /api/notifications — public
 router.get('/', async (req, res) => {

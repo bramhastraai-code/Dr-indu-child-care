@@ -11,6 +11,9 @@ const {
     getPendingMessages,
     updateMessageStatus
 } = require('./whatsapp.controller');
+const auth = require('../../middleware/auth');
+
+router.use(auth);
 
 // All public — no auth
 

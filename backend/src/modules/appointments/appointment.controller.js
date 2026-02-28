@@ -19,6 +19,7 @@ const generateAppointmentId = async () => {
     const seq = last ? parseInt(last.appointment_id.replace(prefix, ''), 10) + 1 : 1;
     return `${prefix}${seq.toString().padStart(5, '0')}`;
 };
+exports.generateAppointmentId = generateAppointmentId;
 
 const resolveDoctorDetails = async ({ doctor_id, doctor_name, doctor_speciality }) => {
     let finalId = doctor_id || null;
@@ -361,40 +362,6 @@ exports.getAppointmentStats = async (req, res) => {
     }
 };
 
-// ── 4. GET /api/appointments/by-mobile/:mobile ───────────────────────────────
-// Lookup upcoming appointments by mobile number (replaces /by-wa/:wa_id)
-exports.getAppointmentsByMobile = async (req, res) => {
-    try {
-        const raw = req.params.mobile || req.params.wa_id;
-        const normalized = normalizeWaId(raw);
-        const wa_hash = hashField(normalizePhone(raw));
-
-        const patient = await Patient.findOne({
-            wa_hash,
-            is_deleted: false
-        });
-        if (!patient) return res.status(404).json({ success: false, message: `No patient found for ${raw}` });
-
-        const appointments = await Appointment.find({
-            patient_id: patient.patient_id,
-            status: { $in: ['BOOKED', 'CONFIRMED'] },
-            appointment_date: { $gte: toMidnight(new Date()) }
-        }).sort({ appointment_date: 1 }).limit(5);
-
-        const enriched = await Promise.all(appointments.map(enrichAppointment));
-        res.json({
-            success: true,
-            patient_id: patient.patient_id,
-            child_name: patient.child_name,
-            wa_id: patient.wa_id || normalized,
-            data: enriched
-        });
-    } catch (err) {
-        console.error('[getAppointmentsByMobile]', err.message);
-        res.status(500).json({ success: false, error: err.message });
-    }
-};
-
 // ── 5. GET /api/appointments/:appointment_id ─────────────────────────────────
 exports.getAppointmentById = async (req, res) => {
     try {
@@ -653,18 +620,45 @@ exports.bookByWhatsapp = async (req, res) => {
         // Step 2: Extract local mobile
         const wa_hash = hashField(normalizePhone(extractMobile(rawWaId)));
 
-        // Step 3: Check patient exists
-        const patient = await Patient.findOne({
-            wa_hash,
-            is_deleted: false
-        });
+        // Step 3: Resolve Patient (Prioritize patient_id from body, else resolve by wa_hash)
+        const { patient_id: req_patient_id, child_name: req_child_name } = req.body || {};
+        let patient = null;
 
-        // Step 4: If not found — reject with 409
+        if (req_patient_id) {
+            patient = await Patient.findOne({ patient_id: req_patient_id, is_deleted: false });
+        } else {
+            const patients = await Patient.find({ wa_hash, is_deleted: false });
+
+            if (patients.length === 0) {
+                return res.status(409).json({
+                    success: false,
+                    error_code: 'PATIENT_NOT_FOUND',
+                    message: 'Mobile number not registered. Please complete registration first.'
+                });
+            }
+
+            if (patients.length === 1) {
+                patient = patients[0];
+            } else {
+                // Siblings registered to same mobile number
+                if (req_child_name) {
+                    patient = patients.find(p => p.child_name && p.child_name.toLowerCase() === req_child_name.toLowerCase());
+                }
+
+                if (!patient) {
+                    return res.status(409).json({
+                        success: false,
+                        error_code: 'AMBIGUOUS_PATIENT',
+                        message: 'Multiple children registered to this mobile. Please specify a patient_id or child_name.',
+                        options: patients.map(p => ({ patient_id: p.patient_id, child_name: p.child_name }))
+                    });
+                }
+            }
+        }
+
+        // Step 4: Final verification
         if (!patient) {
-            return res.status(409).json({
-                success: false,
-                message: 'Mobile number not registered. Please complete registration first.'
-            });
+            return res.status(409).json({ success: false, message: 'Could not resolve patient identity.' });
         }
 
         // Step 5: Book using unified core logic (inline to store wa_id)

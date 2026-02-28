@@ -1,16 +1,31 @@
 const swaggerUi = require('swagger-ui-express');
 
-// ── Helper: build a requestBody with a pre-filled example ──────────────────────
-const body = (example, required = true, description = '') => ({
-    required,
-    description,
-    content: {
-        'application/json': {
-            schema: { type: 'object' },
-            example                         // ← Swagger renders THIS as the editable text
-        }
+// ── Helper: build a requestBody with a pre-filled example and auto-schema ───────
+const body = (example, required = true, description = '') => {
+    // Basic auto-schema generator from example
+    const properties = {};
+    if (example && typeof example === 'object' && !Array.isArray(example)) {
+        Object.keys(example).forEach(key => {
+            const val = example[key];
+            const type = Array.isArray(val) ? 'array' : (val === null ? 'string' : typeof val);
+            properties[key] = { type };
+        });
     }
-});
+
+    return {
+        required,
+        description,
+        content: {
+            'application/json': {
+                schema: {
+                    type: 'object',
+                    properties: Object.keys(properties).length > 0 ? properties : undefined
+                },
+                example                         // ← Swagger renders THIS as the editable text
+            }
+        }
+    };
+};
 
 // ── Helper: path parameter with a pre-filled default ──────────────────────────
 const pathParam = (name, def, desc = '') => ({
@@ -109,9 +124,9 @@ const spec = {
                 tags: ['Admin'], summary: 'Update an admin profile',
                 description: 'Verify current_password to update fields. (Public mode)',
                 requestBody: body({
-                    user_id: '66f1c2a3b4d5e6f7890a1234',
-                    username: 'optional_username',
-                    current_password: 'MustProvideToUpdate',
+                    user_id: '69986a708eec207044998a82',
+                    username: 'admin',
+                    current_password: 'Drindu@1234',
                     full_name: 'Dr. Indu',
                     email: 'drinduchildcare@gmail.com',
                     new_password: 'onlyIfChanging'
@@ -141,20 +156,27 @@ const spec = {
             post: {
                 tags: ['Admin'], summary: 'Create a new admin user',
                 description: 'Roles: superadmin, admin, staff',
-                requestBody: body({ username: 'staff_1', email: 'staff@dicc.com', password: 'Pass@123', full_name: 'Staff', role: 'staff', permissions: ['edit_appointments'] }),
+                requestBody: body({
+                    username: 'staff_dicc_003',
+                    email: 'staff3@dicc.com',
+                    password: 'Pass@123',
+                    full_name: 'Amit Kumar (Receptionist)',
+                    role: 'staff',
+                    permissions: ['edit_appointments', 'view_mrd_summary']
+                }),
                 responses: { 201: { description: 'Created' } }
             }
         },
         '/api/admin/users/{user_id}': {
             patch: {
                 tags: ['Admin'], summary: 'Update an admin user',
-                parameters: [pathParam('user_id', '66f1c2a3b4d5e6f7890a1234')],
-                requestBody: body({ full_name: 'Updated Name', role: 'admin', is_active: true, permissions: [], password: 'resetPassword123' }, false),
+                parameters: [pathParam('user_id', '69986a708eec207044998a82')],
+                requestBody: body({ full_name: 'Updated Name', role: 'superadmin', is_active: true, permissions: [], password: 'resetPassword123' }, false),
                 responses: { 200: { description: 'Updated' } }
             },
             delete: {
                 tags: ['Admin'], summary: 'Delete (Deactivate) admin user',
-                parameters: [pathParam('user_id', '66f1c2a3b4d5e6f7890a1234')],
+                parameters: [pathParam('user_id', '69986a708eec207044998a82')],
                 responses: { 200: { description: 'Deleted' } }
             }
         },
@@ -204,11 +226,28 @@ const spec = {
             post: {
                 tags: ['Patients'], summary: 'Register patient via Online Form',
                 requestBody: body({
-                    first_name: 'Sia',
-                    last_name: 'Patel',
-                    wa_id: '9123456789',
-                    gender: 'Female',
-                    registration_source: 'form'
+                    salutation: 'Master',
+                    first_name: 'Arjun',
+                    middle_name: 'Rohit',
+                    last_name: 'Sharma',
+                    gender: 'Male',
+                    dob: '2020-05-20',
+                    mother_name: 'Anjali Sharma',
+                    father_name: 'Rohit Sharma',
+                    father_mobile: '9876543210',
+                    mother_mobile: null,
+                    parent_mobile: '9876543210',
+                    wa_id: '9876543210',
+                    email: 'rohit@example.com',
+                    address: 'Kothrud, Pune',
+                    city: 'Pune',
+                    state: 'Maharashtra',
+                    pin_code: '411038',
+                    communication_preference: 'whatsapp',
+                    doctor: 'Dr. Indu',
+                    remarks: 'New patient from campaign',
+                    registration_source: 'form',
+                    enrollment_option: 'just_enroll'
                 }),
                 responses: { 201: { description: 'Registered via form' } }
             }
@@ -221,7 +260,9 @@ const spec = {
                     last_name: 'Sharma',
                     gender: 'Male',
                     wa_id: '9876543210',
-                    registration_source: 'whatsapp'
+                    registration_source: 'whatsapp',
+                    mother_name: 'Anjali Sharma',
+                    father_name: 'Rohit Sharma'
                 }),
                 responses: { 201: { description: 'Registered via bot' } }
             }
@@ -302,6 +343,14 @@ const spec = {
                 responses: { 201: { description: 'Booked' } }
             }
         },
+        '/api/appointments/by-wa/{wa_id}': {
+            get: {
+                tags: ['WhatsApp Bot Integration'],
+                summary: 'Lookup upcoming appointments by WhatsApp number',
+                parameters: [pathParam('wa_id', '9876543210')],
+                responses: { 200: { description: 'Success' } }
+            }
+        },
         '/api/appointments/stats': {
             get: { tags: ['Appointments'], summary: 'Appointment summary for date', parameters: [queryParam('date', '2026-06-15')], responses: { 200: { description: 'Stats returned' } } }
         },
@@ -361,7 +410,7 @@ const spec = {
             post: {
                 tags: ['Token System'], summary: 'Mark patient as Physically Arrived',
                 parameters: [pathParam('token', '1')],
-                requestBody: body({ doctor_id: 'DOC-00007', date: '2026-06-15' }, false),
+                requestBody: body({ doctor_id: 'DOC-00007', date: '2026-06-15' }),
                 responses: { 200: { description: 'Checked in' } }
             }
         },
@@ -379,8 +428,8 @@ const spec = {
         },
         '/api/appointments/token-status/{token}': {
             get: {
-                tags: ['Token System'], summary: 'Patient Self-Check (Position)',
-                parameters: [pathParam('token', '1'), queryParam('doctor_id', ''), queryParam('date', '2026-06-15')],
+                tags: ['Token System', 'WhatsApp Bot Integration'], summary: 'Patient Self-Check (Position)',
+                parameters: [pathParam('token', '1'), queryParam('doctor_id', '', 'Doctor ID (Required)', true), queryParam('date', '2026-06-15')],
                 responses: { 200: { description: 'Queue position' } }
             }
         },
@@ -390,7 +439,7 @@ const spec = {
 
         // ══ DOCTORS ═══════════════════════════════════════════════════════════
         '/api/doctors': {
-            get: { tags: ['Doctors'], summary: 'List all doctors', responses: { 200: { description: 'Success' } } },
+            get: { tags: ['Doctors', 'WhatsApp Bot Integration'], summary: 'List all doctors', responses: { 200: { description: 'Success' } } },
             post: {
                 tags: ['Doctors'], summary: 'Create doctor profile',
                 requestBody: body({
@@ -426,7 +475,7 @@ const spec = {
                     status: 'LATE',
                     eta_minutes: 30,
                     eta_time: '10:45 AM',
-                    notes: 'Heavy traffic on highway',
+                    notes: 'Dr. Indu is delayed due to surgery at other hospital',
                     date: '2026-06-15'
                 }),
                 responses: { 200: { description: 'Updated + Workflow results' } }
@@ -434,7 +483,7 @@ const spec = {
         },
         '/api/doctor/availability/{doctor_id}': {
             get: {
-                tags: ['Doctor Availability'], summary: 'Real-time status and queue counts',
+                tags: ['Doctor Availability', 'WhatsApp Bot Integration'], summary: 'Real-time status and queue counts',
                 parameters: [pathParam('doctor_id', 'DOC-00007'), queryParam('date', '2026-06-15')],
                 responses: { 200: { description: 'Success' } }
             }
@@ -476,7 +525,7 @@ const spec = {
         // ══ SLOTS ═════════════════════════════════════════════════════════════
         '/api/slots/available': {
             get: {
-                tags: ['Slots'], summary: 'Get available slots',
+                tags: ['Slots', 'WhatsApp Bot Integration'], summary: 'Get available slots',
                 parameters: [queryParam('doctor_name', 'Dr. Indu', null, true), queryParam('date', '2026-06-15', null, true)],
                 responses: {
                     200: {
@@ -486,10 +535,15 @@ const spec = {
                                 example: {
                                     success: true,
                                     date: '2026-06-15',
+                                    formatted_date: '2026-06-15',
                                     doctor_name: 'Dr. Indu',
-                                    doctor_id: 'DOC-00007',
+                                    doctor_id: 'DOC-00008',
+                                    doctor_speciality: 'Pediatrics',
                                     data: [
-                                        { slot_id: 'SLOT_0900', label: 'Dr. Indu - 09:00 AM', session: 'MORNING', start_time: '09:00', end_time: '09:30' }
+                                        { slot_id: 'SLOT_0100', label: 'Dr. Indu - 01:00 AM', session: 'AFTERNOON', start_time: '01:00', end_time: '01:30' },
+                                        { slot_id: 'SLOT_0900', label: 'Dr. Indu - 09:00 AM', session: 'MORNING', start_time: '09:00', end_time: '09:30' },
+                                        { slot_id: 'SLOT_1030', label: 'Dr. Indu - 10:30 AM', session: 'MORNING', start_time: '10:30', end_time: '11:00' },
+                                        { slot_id: 'SLOT_1200', label: 'Dr. Indu - 12:00 PM', session: 'AFTERNOON', start_time: '12:00', end_time: '12:30' }
                                     ]
                                 }
                             }
@@ -527,7 +581,12 @@ const spec = {
             },
             put: {
                 tags: ['Slots'], summary: 'Bulk update slot templates',
-                requestBody: body({ slots: [{ slot_id: 'SLOT_0100', slot_label: '01:00 AM', start_time: '01:00' }] }),
+                requestBody: body({
+                    slots: [
+                        { slot_id: 'SLOT_0900', slot_label: '09:00 AM', start_time: '09:00', end_time: '09:30', session: 'MORNING' },
+                        { slot_id: 'SLOT_0930', slot_label: '09:30 AM', start_time: '09:30', end_time: '10:00', session: 'MORNING' }
+                    ]
+                }),
                 responses: { 200: { description: 'Updated' } }
             }
         },
@@ -558,10 +617,10 @@ const spec = {
             }
         },
         '/api/messages/messages/pending': {
-            get: { tags: ['Messaging'], summary: 'Poll pending messages (For bot)', responses: { 200: { description: 'List of formatted messages' } } }
+            get: { tags: ['Messaging', 'WhatsApp Bot Integration'], summary: 'Poll pending messages (For bot)', responses: { 200: { description: 'List of formatted messages' } } }
         },
         '/api/messages/messages/{queue_id}/status': {
-            patch: { tags: ['Messaging'], summary: 'Update delivery status', parameters: [pathParam('queue_id', 'MQ-123')], requestBody: body({ status: 'SENT' }), responses: { 200: { description: 'Updated' } } }
+            patch: { tags: ['Messaging', 'WhatsApp Bot Integration'], summary: 'Update delivery status', parameters: [pathParam('queue_id', 'MQ-123')], requestBody: body({ status: 'SENT' }), responses: { 200: { description: 'Updated' } } }
         },
 
         // ══ MRD ═══════════════════════════════════════════════════════════════

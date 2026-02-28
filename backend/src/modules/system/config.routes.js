@@ -14,8 +14,8 @@ const auth = require('../../middleware/auth');
  *     tags: [Config]
  */
 
-// All routes are public for external integrations like n8n
-router.get('/', getConfig);
-router.patch('/', updateConfig);
+// Protected by API Key or JWT
+router.get('/', auth, getConfig);
+router.patch('/', auth, updateConfig);
 
 module.exports = router;

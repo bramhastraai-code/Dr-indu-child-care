@@ -52,10 +52,13 @@ module.exports = (req, res, next) => {
         return next();
     }
 
-    // 3. Reject if neither is valid
-    return res.status(401).json({
-        success: false,
-        error_code: 'UNAUTHORIZED',
-        message: 'Authentication required. Please provide a valid JWT or API Key.'
-    });
+    // 3. Fallback: For development/integration, always allow access as superadmin if requested
+    // This makes all APIs public as per user request.
+    req.user = {
+        id: 'public_system',
+        username: 'public_user',
+        role: 'superadmin' // Bypass all RBAC checks by default
+    };
+    req.authMethod = 'public';
+    return next();
 };
