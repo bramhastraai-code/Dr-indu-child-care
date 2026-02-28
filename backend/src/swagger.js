@@ -54,8 +54,8 @@ const spec = {
         `,
     },
     servers: [
-        { url: 'https://api-dr-indu-child-care.brahmaastra.ai/', description: 'Production Server' },
-        //{ url: 'http://localhost:5000/', description: 'Local Development' }
+        //{ url: 'https://api-dr-indu-child-care.brahmaastra.ai/', description: 'Production Server' },
+        { url: 'http://localhost:5000/', description: 'Local Development' }
     ],
     components: {},
     security: [],
@@ -82,20 +82,80 @@ const spec = {
                 responses: { 200: { description: 'Returns JWT' } }
             }
         },
+        '/api/admin/refresh-token': {
+            post: {
+                tags: ['Admin'], summary: 'Refresh access token',
+                responses: { 200: { description: 'New token issued' } }
+            }
+        },
+        '/api/admin/logout': {
+            post: {
+                tags: ['Admin'], summary: 'Logout admin user',
+                responses: { 200: { description: 'Logged out' } }
+            }
+        },
+        '/api/admin/profile': {
+            get: {
+                tags: ['Admin'], summary: 'Get an admin profile',
+                description: 'Fetches profile by user_id or username (Public). If password provided, it will be verified.',
+                parameters: [
+                    queryParam('user_id', '', 'Lookup by MongoDB ID'),
+                    queryParam('username', '', 'Lookup by username'),
+                    queryParam('password', '', 'Verify password')
+                ],
+                responses: { 200: { description: 'Success' } }
+            },
+            patch: {
+                tags: ['Admin'], summary: 'Update an admin profile',
+                description: 'Verify current_password to update fields. (Public mode)',
+                requestBody: body({
+                    user_id: '66f1c2a3b4d5e6f7890a1234',
+                    username: 'optional_username',
+                    current_password: 'MustProvideToUpdate',
+                    full_name: 'Dr. Indu',
+                    email: 'drinduchildcare@gmail.com',
+                    new_password: 'onlyIfChanging'
+                }, false),
+                responses: { 200: { description: 'Updated' } }
+            }
+        },
+        '/api/admin/overview': {
+            get: {
+                tags: ['Admin'], summary: 'System overview stats',
+                description: 'Returns counts of users, doctors, patients, and audit logs.',
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+        '/api/admin/roles': {
+            get: {
+                tags: ['Admin'], summary: 'Get available system roles',
+                description: 'Returns list of roles (superadmin, admin, staff) with descriptions.',
+                responses: { 200: { description: 'Success' } }
+            }
+        },
         '/api/admin/users': {
-            get: { tags: ['Admin'], summary: 'List all admin users', responses: { 200: { description: 'Success' } } },
+            get: {
+                tags: ['Admin'], summary: 'List all admin users',
+                responses: { 200: { description: 'Success' } }
+            },
             post: {
                 tags: ['Admin'], summary: 'Create a new admin user',
-                requestBody: body({ username: 'staff_1', email: 'staff@dicc.com', password: 'Pass@123', full_name: 'Staff', role: 'admin' }),
+                description: 'Roles: superadmin, admin, staff',
+                requestBody: body({ username: 'staff_1', email: 'staff@dicc.com', password: 'Pass@123', full_name: 'Staff', role: 'staff', permissions: ['edit_appointments'] }),
                 responses: { 201: { description: 'Created' } }
             }
         },
-        '/api/admin/users/{id}': {
+        '/api/admin/users/{user_id}': {
             patch: {
                 tags: ['Admin'], summary: 'Update an admin user',
-                parameters: [pathParam('id', '66f1c2a3b4d5e6f7890a1234')],
-                requestBody: body({ full_name: 'Updated Name', role: 'admin', is_active: true }, false),
+                parameters: [pathParam('user_id', '66f1c2a3b4d5e6f7890a1234')],
+                requestBody: body({ full_name: 'Updated Name', role: 'admin', is_active: true, permissions: [], password: 'resetPassword123' }, false),
                 responses: { 200: { description: 'Updated' } }
+            },
+            delete: {
+                tags: ['Admin'], summary: 'Delete (Deactivate) admin user',
+                parameters: [pathParam('user_id', '66f1c2a3b4d5e6f7890a1234')],
+                responses: { 200: { description: 'Deleted' } }
             }
         },
 
@@ -615,6 +675,6 @@ module.exports = (app) => {
             filter: true,
         }
     }));
-    console.log('📚 Swagger docs (Prod)  → https://api-dr-indu-child-care.brahmaastra.ai/api-docs');
-    //console.log('📚 Swagger docs (Local) → http://localhost:5000/api-docs');
+    //console.log('📚 Swagger docs (Prod)  → https://api-dr-indu-child-care.brahmaastra.ai/api-docs');
+    console.log('📚 Swagger docs (Local) → http://localhost:5000/api-docs');
 };

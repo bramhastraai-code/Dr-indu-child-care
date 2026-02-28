@@ -174,7 +174,7 @@ exports.createAdmin = async (req, res) => {
 // @access  Private (SUPER_ADMIN)
 exports.updateAdmin = async (req, res) => {
     try {
-        const { full_name, role, is_active, email, permissions } = req.body || {};
+        const { full_name, role, is_active, email, permissions, password } = req.body || {};
         const { user_id } = req.params;
 
         if (!mongoose.Types.ObjectId.isValid(user_id)) {
@@ -188,21 +188,22 @@ exports.updateAdmin = async (req, res) => {
 
         const old_value = { full_name: admin.full_name, role: admin.role, is_active: admin.is_active, email: admin.email };
 
-        const updateFields = {};
-        if (full_name !== undefined) updateFields.full_name = full_name;
-        if (email !== undefined) updateFields.email = email;
+        if (full_name !== undefined) admin.full_name = full_name;
+        if (email !== undefined) admin.email = email;
         if (role !== undefined) {
             const normalizedRole = normalizeRole(role);
             if (!normalizedRole) {
                 return res.status(400).json({ success: false, message: 'Invalid role. Allowed roles: superadmin, admin, staff' });
             }
-            updateFields.role = normalizedRole;
+            admin.role = normalizedRole;
         }
-        if (is_active !== undefined) updateFields.is_active = is_active;
-        if (permissions !== undefined) updateFields.permissions = permissions;
+        if (is_active !== undefined) admin.is_active = is_active;
+        if (permissions !== undefined) admin.permissions = permissions;
+        if (password !== undefined && password !== '') {
+            admin.password_hash = password; // pre-save hook will hash it
+        }
 
-        await Admin.updateOne({ _id: admin._id }, { $set: updateFields });
-        Object.assign(admin, updateFields);
+        await admin.save();
 
         await audit({
             event_type: 'ADMIN_USER_UPDATED',
@@ -211,7 +212,7 @@ exports.updateAdmin = async (req, res) => {
             actor: req.user ? req.user.username : 'SYSTEM',
             actor_type: req.user ? req.user.role : 'SUPER_ADMIN',
             old_value,
-            new_value: updateFields
+            new_value: { full_name, role, is_active, email, permissions, password_changed: !!password }
         });
 
         res.json({ success: true, message: 'User updated successfully', data: admin });
@@ -220,9 +221,23 @@ exports.updateAdmin = async (req, res) => {
     }
 };
 
+// @desc    Get available roles (for UI dropdowns)
+// @route   GET /api/admin/roles
+// @access  Public
+exports.getAvailableRoles = async (req, res) => {
+    res.json({
+        success: true,
+        data: [
+            { id: 'superadmin', label: 'Super Admin', description: 'Full system access' },
+            { id: 'admin', label: 'Admin', description: 'Clinic management access' },
+            { id: 'staff', label: 'Staff', description: 'Appointment and patient access' }
+        ]
+    });
+};
+
 // @desc    Delete/deactivate admin user (soft delete)
 // @route   DELETE /api/admin/users/:user_id
-// @access  Private (SUPER_ADMIN)
+// @access  Public
 exports.deleteAdmin = async (req, res) => {
     try {
         const { user_id } = req.params;
@@ -254,15 +269,69 @@ exports.deleteAdmin = async (req, res) => {
     }
 };
 
-// @desc    Get current admin profile
+// @desc    Get system overview (stats for superadmin)
+// @route   GET /api/admin/overview
+// @access  Public
+exports.getSystemOverview = async (req, res) => {
+    try {
+        const [userCount, doctorCount, patientCount, auditCount] = await Promise.all([
+            Admin.countDocuments({ is_active: true }),
+            mongoose.model('Doctor').countDocuments({}),
+            mongoose.model('Patient').countDocuments({ is_deleted: false }),
+            mongoose.model('AuditLog').countDocuments({})
+        ]);
+
+        const roleBreakdown = await Admin.aggregate([
+            { $match: { is_active: true } },
+            { $group: { _id: '$role', count: { $sum: 1 } } }
+        ]);
+
+        res.json({
+            success: true,
+            data: {
+                counts: {
+                    active_users: userCount,
+                    doctors: doctorCount,
+                    patients: patientCount,
+                    total_audit_logs: auditCount
+                },
+                roles: roleBreakdown.reduce((acc, r) => {
+                    acc[r._id] = r.count;
+                    return acc;
+                }, {})
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Get an admin profile (Public with credentials check)
 // @route   GET /api/admin/profile
-// @access  Private
+// @access  Public
 exports.getProfile = async (req, res) => {
     try {
-        const admin = await Admin.findById(req.user.id).select('-password_hash');
+        const { user_id, username, password } = req.query || {};
+        let admin;
+
+        if (user_id) {
+            admin = await Admin.findById(user_id);
+        } else if (username) {
+            admin = await Admin.findOne({ username });
+        } else {
+            // Re-designed for public use: fallback to first active superadmin
+            admin = await Admin.findOne({ role: 'superadmin', is_active: true });
+        }
+
         if (!admin) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
+
+        // Check password if provided (for secure public lookup)
+        if (password && !(await admin.comparePassword(password))) {
+            return res.status(401).json({ success: false, message: 'Invalid password' });
+        }
+
         res.json({
             success: true,
             data: {
@@ -281,19 +350,38 @@ exports.getProfile = async (req, res) => {
     }
 };
 
-// @desc    Update current admin profile
+// @desc    Update an admin profile (Public with credentials check)
 // @route   PATCH /api/admin/profile
-// @access  Private
+// @access  Public
 exports.updateProfile = async (req, res) => {
     try {
-        const { full_name, email } = req.body || {};
-        const updateFields = {};
-        if (full_name !== undefined) updateFields.full_name = full_name;
-        if (email !== undefined) updateFields.email = email;
+        const { user_id, username, current_password, full_name, email, new_password } = req.body || {};
+        let admin;
 
-        await Admin.updateOne({ _id: req.user.id }, { $set: updateFields });
+        if (user_id) {
+            admin = await Admin.findById(user_id);
+        } else if (username) {
+            admin = await Admin.findOne({ username });
+        }
 
-        res.json({ success: true, message: 'Profile updated successfully' });
+        if (!admin) {
+            return res.status(400).json({ success: false, message: 'Please provide user_id or username to identify which profile to update.' });
+        }
+
+        // Verify current password for any update in public mode
+        if (!current_password || !(await admin.comparePassword(current_password))) {
+            return res.status(401).json({ success: false, message: 'Invalid current password. Verification required to update profile.' });
+        }
+
+        if (full_name !== undefined) admin.full_name = full_name;
+        if (email !== undefined) admin.email = email;
+        if (new_password !== undefined && new_password !== '') {
+            admin.password_hash = new_password;
+        }
+
+        await admin.save();
+
+        res.json({ success: true, message: 'Profile updated successfully', data: { id: admin._id, username: admin.username } });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

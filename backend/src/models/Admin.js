@@ -37,6 +37,10 @@ const AdminSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
+    permissions: {
+        type: [String],
+        default: []
+    },
     created_at: {
         type: Date,
         default: Date.now

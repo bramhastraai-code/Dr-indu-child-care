@@ -70,7 +70,8 @@ const sendTokenResponse = async (user, ipAddress, res) => {
             id: user._id,
             username: user.username,
             role: user.role,
-            full_name: user.full_name
+            full_name: user.full_name,
+            permissions: user.permissions || []
         }
     });
 };

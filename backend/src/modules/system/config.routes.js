@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getConfig, updateConfig } = require('./system.controller');
+const auth = require('../../middleware/auth');
 
 /**
  * @openapi
