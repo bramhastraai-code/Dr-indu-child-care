@@ -4,7 +4,8 @@ const {
     getHealth,
     getConfig,
     updateConfig,
-    getAuditLogs
+    getAuditLogs,
+    getWorkflowStages
 } = require('./system.controller');
 const auth = require('../../middleware/auth');
 
@@ -19,5 +20,14 @@ router.get('/health', getHealth);
 router.get('/config', auth, getConfig);
 router.put('/config', auth, updateConfig);
 router.get('/audit-logs', auth, getAuditLogs);
+
+/**
+ * @openapi
+ * /api/system/workflow-stages:
+ *   get:
+ *     summary: Get all workflow stages
+ *     tags: [System]
+ */
+router.get('/workflow-stages', getWorkflowStages);
 
 module.exports = router;

@@ -7,6 +7,14 @@ const audit = require('../../utils/audit');
 const { normalizeWaId, normalizePhone } = require('../../utils/helpers');
 const { hashField } = require('../../utils/encryption');
 
+const WORKFLOW_STAGES = [
+    { stage_number: 1, name: "General Talk", key: "GENERAL_TALK" },
+    { stage_number: 2, name: "Patient Registration", key: "PATIENT_REGISTRATION" },
+    { stage_number: 3, name: "Appointment Booking", key: "APPOINTMENT_BOOKING" },
+    { stage_number: 4, name: "Appointment Reminder", key: "APPOINTMENT_REMINDER" },
+    { stage_number: 5, name: "Appointment Completed", key: "APPOINTMENT_COMPLETED" }
+];
+
 // Helper: normalise wa_id — accept wa_id or wa_number in body
 const getWaId = (body) => body ? normalizeWaId(body.wa_id || body.wa_number) : null;
 
@@ -61,6 +69,7 @@ exports.createSession = async (req, res) => {
             wa_id,
             patient_id: patients.length === 1 ? patients[0].patient_id : null,
             current_state: initialState,
+            stage_number: req.body.stage_number || (patients.length > 0 ? 1 : 1), // Default to 1
             session_data: {
                 source: source || 'WATI',
                 existing_patient: patients.length > 0,
@@ -81,7 +90,7 @@ exports.createSession = async (req, res) => {
 exports.updateSession = async (req, res) => {
     try {
         const wa_id = getWaId(req.body);
-        const { current_state, session_data, retry_count, patient_id } = req.body || {};
+        const { current_state, session_data, retry_count, patient_id, stage_number } = req.body || {};
         if (!wa_id) return res.status(400).json({ success: false, message: 'wa_id is required' });
 
         const session = await BotSession.findOneAndUpdate(
@@ -92,6 +101,7 @@ exports.updateSession = async (req, res) => {
                     session_data,
                     retry_count,
                     patient_id,
+                    stage_number,
                     last_activity_at: new Date(),
                     expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000)
                 }
@@ -379,6 +389,57 @@ exports.getSessionHistory = async (req, res) => {
         const wa_id = normalizeWaId(req.params.wa_id);
         const sessions = await BotSession.find({ wa_id }).sort({ created_at: -1 }).limit(10);
         res.json({ success: true, data: sessions });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+// @desc    Get Bot Workflow Stages (Stage Definitions 1-5)
+// @route   GET /api/bot/workflow-stages
+exports.getWorkflowStages = (req, res) => {
+    try {
+        res.status(200).json({
+            success: true,
+            count: WORKFLOW_STAGES.length,
+            data: WORKFLOW_STAGES
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Get comprehensive workflow status (User Progress + Stages List)
+// @route   GET /api/bot/workflow-status/:wa_id
+exports.getBotWorkflowStatus = async (req, res) => {
+    try {
+        const wa_id = normalizeWaId(req.params.wa_id);
+        const session = await BotSession.findOne({
+            wa_id,
+            is_active: true,
+            expires_at: { $gt: new Date() }
+        }).sort({ created_at: -1 });
+
+        const currentStageNumber = session ? session.stage_number : 0;
+        const currentStageInfo = WORKFLOW_STAGES.find(s => s.stage_number === currentStageNumber) || {
+            name: "Not Started",
+            key: "IDLE"
+        };
+
+        // Check registration status
+        const patients = await findPatientsByWa(wa_id);
+        const is_registered = patients.length > 0;
+
+        res.status(200).json({
+            success: true,
+            wa_id,
+            is_registered,
+            current_stage: {
+                number: currentStageNumber,
+                name: currentStageInfo.name,
+                key: currentStageInfo.key,
+                state: session ? session.current_state : "IDLE",
+                last_active: session ? session.last_activity_at : null
+            }
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

@@ -12,7 +12,9 @@ const {
     resolveEscalation,
     getUnregisteredInteractions,
     logChat,
-    getChatHistory
+    getChatHistory,
+    getWorkflowStages,
+    getBotWorkflowStatus
 } = require('./bot.controller');
 const auth = require('../../middleware/auth');
 
@@ -35,6 +37,31 @@ router.post('/message/log', logMessage);
 router.get('/interactions/unregistered', getUnregisteredInteractions);
 router.get('/escalations', getEscalations);
 router.patch('/escalations/:escalation_id/resolve', resolveEscalation);
+/**
+ * @openapi
+ * /api/bot/workflow-status/{wa_id}:
+ *   get:
+ *     summary: 📊 Dedicated Bot Workflow Status Tracker
+ *     description: Returns the user's current progress AND the list of all possible stages.
+ *     tags: [WhatsApp Bot Integration]
+ *     parameters:
+ *       - name: wa_id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: "9876543210"
+ */
+router.get('/workflow-status/:wa_id', getBotWorkflowStatus);
+
+/**
+ * @openapi
+ * /api/bot/workflow-stages:
+ *   get:
+ *     summary: Get all WhatsApp Bot workflow stages
+ *     tags: [Bot]
+ */
+router.get('/workflow-stages', getWorkflowStages);
 
 // ── Analytics (Public) ───────────────────────────────────────────
 router.get('/analytics/daily', async (req, res) => {
