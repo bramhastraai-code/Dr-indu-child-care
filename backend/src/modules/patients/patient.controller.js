@@ -130,11 +130,11 @@ exports.registerPatient = async (req, res) => {
             is_deleted: false
         });
         if (existing) {
-            return res.status(409).json({
-                success: false,
-                error_code: 'PATIENT_EXISTS',
-                message: 'This child is already registered with this mobile number',
-                patient_id: existing.patient_id
+            return res.json({
+                success: true,
+                message: 'The patient with this number is already registered',
+                is_already_registered: true,
+                data: existing
             });
         }
 
@@ -271,7 +271,12 @@ exports.getPatientByWaId = async (req, res) => {
         });
 
         if (!patient) {
-            return res.status(404).json({ success: false, error_code: 'PATIENT_NOT_FOUND', message: 'Patient not found' });
+            return res.json({
+                success: true,
+                is_registered: false,
+                message: 'Patient not registered. Please complete registration first.',
+                wa_id: normalized
+            });
         }
 
         const stats = await Appointment.aggregate([
@@ -281,6 +286,7 @@ exports.getPatientByWaId = async (req, res) => {
 
         res.json({
             success: true,
+            is_registered: true,
             data: {
                 ...patient.toObject(),
                 total_appointments: stats[0]?.count || 0

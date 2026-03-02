@@ -69,8 +69,8 @@ const spec = {
         `,
     },
     servers: [
-        { url: 'https://api-dr-indu-child-care.brahmaastra.ai/', description: 'Production Server' },
-        //{ url: 'http://localhost:5000/', description: 'Local Development' }
+        { url: 'http://localhost:5000/', description: 'Local Development' },
+        { url: 'https://api-dr-indu-child-care.brahmaastra.ai/', description: 'Production Server' }
     ],
     components: {},
     security: [],
@@ -264,7 +264,17 @@ const spec = {
                     mother_name: 'Anjali Sharma',
                     father_name: 'Rohit Sharma'
                 }),
-                responses: { 201: { description: 'Registered via bot' } }
+                responses: {
+                    201: { description: 'Registered via bot' },
+                    200: {
+                        description: 'Patient already exists',
+                        content: {
+                            'application/json': {
+                                example: { success: true, is_already_registered: true, message: 'The patient with this number is already registered', data: { patient_id: 'DICC-2026-0001', child_name: 'Arjun Sharma' } }
+                            }
+                        }
+                    }
+                }
             }
         },
         '/api/patients/{patient_id}': {
@@ -291,7 +301,30 @@ const spec = {
             }
         },
         '/api/patients/by-wa/{wa_id}': {
-            get: { tags: ['WhatsApp Bot Integration'], summary: 'Lookup patient by WhatsApp Number', parameters: [pathParam('wa_id', '9876543210')], responses: { 200: { description: 'Success' } } }
+            get: {
+                tags: ['WhatsApp Bot Integration'],
+                summary: 'Lookup patient by WhatsApp Number',
+                parameters: [pathParam('wa_id', '9876543210')],
+                responses: {
+                    200: {
+                        description: 'Returns registration status. Always success: true even if not found.',
+                        content: {
+                            'application/json': {
+                                examples: {
+                                    registered: {
+                                        summary: 'Patient Found',
+                                        value: { success: true, is_registered: true, data: { patient_id: 'DICC-2026-0001', child_name: 'Arjun Sharma', total_appointments: 2 } }
+                                    },
+                                    unregistered: {
+                                        summary: 'Patient Not Found',
+                                        value: { success: true, is_registered: false, message: 'Patient not registered. Please complete registration first.', wa_id: '9876543210' }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         },
 
         // ══ APPOINTMENTS ══════════════════════════════════════════════════════

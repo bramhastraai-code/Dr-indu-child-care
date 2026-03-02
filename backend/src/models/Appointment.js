@@ -93,10 +93,10 @@ const AppointmentSchema = new mongoose.Schema({
     // ── Token / Queue System ──────────────────────────────────────────
     // Daily sequential token number per doctor (e.g. 1, 2, 3...)
     token_number: { type: Number, default: null, index: true },
-    // WAITING = in queue, IN_PROGRESS = being seen, COMPLETED, SKIPPED
+    // WAITING = in queue, CHECKED_IN = arrived, IN_PROGRESS = being seen, COMPLETED, SKIPPED, NO_SHOW
     token_status: {
         type: String,
-        enum: ['WAITING', 'IN_PROGRESS', 'COMPLETED', 'SKIPPED', null],
+        enum: ['WAITING', 'CHECKED_IN', 'IN_PROGRESS', 'COMPLETED', 'SKIPPED', 'NO_SHOW', null],
         default: null
     },
     // When the patient physically checked in at clinic

@@ -45,9 +45,46 @@ const extractMobile = (wa_id = '') => {
  */
 const normalizePhone = (phone) => extractMobile(phone);
 
+/**
+ * Canonicalizes doctor names: strip extra spaces and handle prefixes ("Dr." vs "Dr ") consistently for lookups.
+ * @param {string} name 
+ * @returns {string}
+ */
+const canonicalizeDoctorName = (name) => {
+    if (!name) return null;
+    let n = name.trim().replace(/\s+/g, ' ');
+    // Handle "Dr ", "Dr.", "dr ", "dr." prefixes
+    const drRegex = /^(dr\.?\s+)(.*)$/i;
+    const match = n.match(drRegex);
+    if (match) {
+        n = 'Dr. ' + match[2].trim();
+    } else if (!n.toLowerCase().startsWith('dr.')) {
+        n = 'Dr. ' + n;
+    }
+    return n;
+};
+
+/**
+ * Generates the next token number for a doctor on a given date.
+ * @param {Object} Appointment - The Mongoose Appointment model.
+ * @param {string} doctor_id 
+ * @param {Date} date 
+ * @returns {Promise<number>}
+ */
+const getNextToken = async (Appointment, doctor_id, date) => {
+    const last = await Appointment.findOne({
+        doctor_id,
+        appointment_date: date,
+        token_number: { $ne: null }
+    }).sort({ token_number: -1 }).select('token_number');
+    return (last?.token_number || 0) + 1;
+};
+
 module.exports = {
     toMidnight,
     normalizeWaId,
     extractMobile,
-    normalizePhone
+    normalizePhone,
+    canonicalizeDoctorName,
+    getNextToken
 };

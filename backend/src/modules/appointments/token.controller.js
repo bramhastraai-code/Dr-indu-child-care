@@ -4,19 +4,30 @@ const Slot = require('../../models/Slot');
 const DoctorAvailability = require('../../models/DoctorAvailability');
 const Doctor = require('../../models/Doctor');
 const audit = require('../../utils/audit');
-const { toMidnight, normalizeWaId, normalizePhone } = require('../../utils/helpers');
+const { toMidnight, normalizeWaId, normalizePhone, canonicalizeDoctorName, getNextToken: getNextTokenNumber } = require('../../utils/helpers');
 const { hashField } = require('../../utils/encryption');
 const { generateAppointmentId } = require('./appointment.controller');
 
-// Helper: generate next token number for a doctor on a given date
-const getNextToken = async (doctor_id, date) => {
-    const last = await Appointment.findOne({
-        doctor_id,
-        appointment_date: date,
-        token_number: { $ne: null }
-    }).sort({ token_number: -1 }).select('token_number');
-    return (last?.token_number || 0) + 1;
+// Helper: resolve doctor by ID or canonical name
+const resolveDoctor = async (doctor_id, doctor_name) => {
+    if (doctor_id) {
+        return await Doctor.findOne({ doctor_id });
+    }
+    if (doctor_name) {
+        const canonical = canonicalizeDoctorName(doctor_name);
+        return await Doctor.findOne({
+            $or: [
+                { name: { $regex: new RegExp(`^${canonical.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+                { name: { $regex: new RegExp(`^${doctor_name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
+            ]
+        });
+    }
+    return null;
 };
+
+// Helper: generate next token number for a doctor on a given date (exported)
+const getNextToken = (doctor_id, date) => getNextTokenNumber(Appointment, doctor_id, date);
+exports.getNextToken = getNextToken;
 
 // ── POST /api/appointments/book-with-token ──────────────────────────
 // Book appointment AND assign a queue token in one step
@@ -46,16 +57,26 @@ exports.bookWithToken = async (req, res) => {
         if (!patient) return res.status(404).json({ success: false, message: 'Patient not found' });
 
         // Resolve doctor
-        let doctor;
-        if (doctor_id) doctor = await Doctor.findOne({ doctor_id });
-        else doctor = await Doctor.findOne({ name: new RegExp(`^${doctor_name}$`, 'i') });
+        const doctor = await resolveDoctor(doctor_id, doctor_name);
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
         const queryDate = toMidnight(appointment_date);
         const slot = await Slot.findOne({ slot_id });
         if (!slot) return res.status(404).json({ success: false, message: 'Slot not found' });
 
-        // Check duplicate
+        // Check if slot is taken
+        const SlotAvailability = require('../../models/SlotAvailability');
+        const slotTaken = await SlotAvailability.findOne({
+            slot_id,
+            slot_date: queryDate,
+            doctor_name: doctor.name,
+            $or: [{ is_booked: true }, { blocked_by_admin: true }]
+        });
+        if (slotTaken) {
+            return res.status(409).json({ success: false, message: 'This time slot is already booked or blocked for this doctor.' });
+        }
+
+        // Check duplicate appointment for patient today
         const existing = await Appointment.findOne({
             patient_id: patient.patient_id,
             appointment_date: queryDate,
@@ -71,7 +92,7 @@ exports.bookWithToken = async (req, res) => {
         // Generate IDs
         const appointment_id = await generateAppointmentId();
 
-        const token_number = await getNextToken(doctor.doctor_id, queryDate);
+        const token_number = await getNextTokenNumber(Appointment, doctor.doctor_id, queryDate);
 
         const appointment = await Appointment.create({
             appointment_id,
@@ -93,6 +114,29 @@ exports.bookWithToken = async (req, res) => {
             last_updated_at: new Date(),
             last_updated_by: req.user?.username || booking_source
         });
+
+        await appointment.save();
+
+        // 5. Mark slot as booked (Atomic update to prevent race conditions)
+        await SlotAvailability.findOneAndUpdate(
+            {
+                slot_id,
+                slot_date: queryDate,
+                doctor_name: doctor.name,
+                is_booked: false,
+                blocked_by_admin: false
+            },
+            {
+                $set: {
+                    is_booked: true,
+                    appointment_id,
+                    doctor_name: doctor.name,
+                    doctor_id: doctor.doctor_id,
+                    last_updated_at: new Date()
+                }
+            },
+            { upsert: true, new: true }
+        );
 
         await audit({
             event_type: 'APPOINTMENT_BOOKED_WITH_TOKEN',
@@ -136,7 +180,7 @@ exports.checkIn = async (req, res) => {
 
         const appt = await Appointment.findOneAndUpdate(
             filter,
-            { $set: { check_in_time: new Date(), token_status: 'WAITING', last_updated_at: new Date() } },
+            { $set: { check_in_time: new Date(), token_status: 'CHECKED_IN', last_updated_at: new Date() } },
             { new: true }
         );
 
@@ -155,8 +199,12 @@ exports.getDailyTokens = async (req, res) => {
         const queryDate = toMidnight(date || new Date());
 
         const filter = { appointment_date: queryDate, token_number: { $ne: null }, is_deleted: false };
-        if (doctor_id) filter.doctor_id = doctor_id;
-        if (doctor_name) filter.doctor_name = new RegExp(doctor_name, 'i');
+
+        if (doctor_id || doctor_name) {
+            const dr = await resolveDoctor(doctor_id, doctor_name);
+            if (dr) filter.doctor_id = dr.doctor_id;
+            else if (doctor_name) filter.doctor_name = new RegExp(doctor_name, 'i');
+        }
 
         const appointments = await Appointment.find(filter)
             .sort({ doctor_id: 1, token_number: 1 })
@@ -171,23 +219,20 @@ exports.getDailyTokens = async (req, res) => {
         patients.forEach(p => { patientMap[p.patient_id] = p.child_name || p.full_name; });
 
         const enriched = appointments.map(a => ({
-            ...a,
-            child_name: patientMap[a.patient_id] || null
+            patient_id: a.patient_id,
+            child_name: patientMap[a.patient_id] || null,
+            token_number: a.token_number,
+            status: a.token_status,
+            slot_id: a.slot_id,
+            appointment_id: a.appointment_id,
+            doctor_name: a.doctor_name,
+            doctor_id: a.doctor_id
         }));
-
-        // Group by doctor
-        const byDoctor = {};
-        enriched.forEach(a => {
-            const key = a.doctor_id || a.doctor_name;
-            if (!byDoctor[key]) byDoctor[key] = { doctor_name: a.doctor_name, doctor_id: a.doctor_id, tokens: [] };
-            byDoctor[key].tokens.push(a);
-        });
 
         res.json({
             success: true,
             date: queryDate,
             total: appointments.length,
-            by_doctor: Object.values(byDoctor),
             data: enriched
         });
     } catch (err) {
@@ -224,21 +269,20 @@ exports.getClinicDisplay = async (req, res) => {
         // Build per-doctor display data
         const doctors = await Doctor.find({ is_active: true }).lean();
         const display = doctors.map(dr => {
-            const avail = availMap[dr.doctor_id] || { status: 'PRESENT', current_token: 0, eta_time: null };
+            const avail = availMap[dr.doctor_id] || { status: 'PRESENT', current_token: 0, eta_time: 'No Delay' };
             const drTokens = activeTokens.filter(t => t.doctor_id === dr.doctor_id);
             const nowServing = drTokens.find(t => t.token_status === 'IN_PROGRESS');
-            const waiting = drTokens.filter(t => t.token_status === 'WAITING');
+            const waiting = drTokens.filter(t => t.token_status === 'CHECKED_IN');
 
             return {
                 doctor_id: dr.doctor_id,
                 doctor_name: dr.name,
                 speciality: dr.speciality,
-                status: avail.status,
-                eta_time: avail.eta_time,
                 now_serving_token: nowServing?.token_number || null,
-                now_serving_patient: nowServing ? (pMap[nowServing.patient_id] || 'Patient') : null,
+                next_token: waiting[0]?.token_number || null,
                 queue_length: waiting.length,
-                next_token: waiting[0]?.token_number || null
+                status: avail.status || 'PRESENT',
+                eta_time: avail.eta_time || 'No Delay'
             };
         });
 
@@ -254,7 +298,7 @@ exports.getClinicDisplay = async (req, res) => {
 };
 
 // ── GET /api/appointments/next-token/:doctor_id ──────────────────────
-// Advance the queue — mark current IN_PROGRESS as COMPLETED, call next WAITING
+// Advance the queue — mark current IN_PROGRESS as COMPLETED, call next CHECKED_IN
 exports.getNextToken = async (req, res) => {
     try {
         const { doctor_id } = req.params;
@@ -263,42 +307,68 @@ exports.getNextToken = async (req, res) => {
         // Complete current in-progress
         await Appointment.updateMany(
             { doctor_id, appointment_date: queryDate, token_status: 'IN_PROGRESS' },
-            { $set: { token_status: 'COMPLETED', last_updated_at: new Date() } }
+            { $set: { token_status: 'COMPLETED', status: 'COMPLETED', last_updated_at: new Date() } }
         );
 
-        // Find next WAITING token (checked-in first, then by token number)
+        // Find next patient: Prioritize CHECKED_IN over WAITING, then by check_in_time or token_number
         const next = await Appointment.findOneAndUpdate(
             {
                 doctor_id,
                 appointment_date: queryDate,
-                token_status: 'WAITING',
+                token_status: { $in: ['CHECKED_IN', 'WAITING'] },
                 is_deleted: false
             },
             { $set: { token_status: 'IN_PROGRESS', called_at: new Date(), last_updated_at: new Date() } },
-            { sort: { check_in_time: 1, token_number: 1 }, new: true }
+            {
+                sort: {
+                    // High priority: CHECKED_IN patients
+                    token_status: 1, // CHECKED_IN comes before WAITING in default sort if we are lucky, but let's be explicit
+                    // Actually token_status sort is not reliable for enum. 
+                    // We'll use a two-step approach or a complex sort if possible.
+                    // But for simple logic: CHECKED_IN > WAITING.
+                },
+                new: true
+            }
+        ).lean();
+
+        // Since $in doesn't guarantee order, let's refine the findOneAndUpdate
+        // Better: Try to find CHECKED_IN first.
+        let nextPatient = await Appointment.findOneAndUpdate(
+            { doctor_id, appointment_date: queryDate, token_status: 'CHECKED_IN', is_deleted: false },
+            { $set: { token_status: 'IN_PROGRESS', called_at: new Date(), last_updated_at: new Date() } },
+            { sort: { token_number: 1 }, new: true }
         );
 
+        if (!nextPatient) {
+            // If no CHECKED_IN, take next WAITING
+            nextPatient = await Appointment.findOneAndUpdate(
+                { doctor_id, appointment_date: queryDate, token_status: 'WAITING', is_deleted: false },
+                { $set: { token_status: 'IN_PROGRESS', called_at: new Date(), last_updated_at: new Date() } },
+                { sort: { token_number: 1 }, new: true }
+            );
+        }
+
         // Update current_token in availability
-        if (next) {
+        if (nextPatient) {
             await DoctorAvailability.findOneAndUpdate(
                 { doctor_id, date: queryDate },
-                { $set: { current_token: next.token_number, updated_at: new Date() } }
+                { $set: { current_token: nextPatient.token_number, updated_at: new Date() } }
             );
         }
 
         const remaining = await Appointment.countDocuments({
             doctor_id,
             appointment_date: queryDate,
-            token_status: 'WAITING'
+            token_status: { $in: ['WAITING', 'CHECKED_IN'] }
         });
 
         res.json({
             success: true,
-            current_token: next?.token_number || null,
-            appointment_id: next?.appointment_id || null,
-            patient_id: next?.patient_id || null,
+            current_token: nextPatient?.token_number || null,
+            appointment_id: nextPatient?.appointment_id || null,
+            patient_id: nextPatient?.patient_id || null,
             remaining_queue: remaining,
-            message: next ? `Now serving token ${next.token_number}` : 'No more patients in queue'
+            message: nextPatient ? `Now serving token ${nextPatient.token_number}` : 'No more patients in queue'
         });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -312,8 +382,9 @@ exports.updateTokenStatus = async (req, res) => {
         const { status, doctor_id, date } = req.body || {};
 
         if (!status) return res.status(400).json({ success: false, message: 'status is required' });
-        if (!['WAITING', 'IN_PROGRESS', 'COMPLETED', 'SKIPPED'].includes(status)) {
-            return res.status(400).json({ success: false, message: 'status must be WAITING, IN_PROGRESS, COMPLETED or SKIPPED' });
+        const validStatuses = ['WAITING', 'CHECKED_IN', 'IN_PROGRESS', 'COMPLETED', 'SKIPPED', 'NO_SHOW'];
+        if (!validStatuses.includes(status)) {
+            return res.status(400).json({ success: false, message: `status must be one of: ${validStatuses.join(', ')}` });
         }
 
         const queryDate = toMidnight(date || new Date());
@@ -327,6 +398,7 @@ exports.updateTokenStatus = async (req, res) => {
         const updateFields = { token_status: status, last_updated_at: new Date() };
         if (status === 'IN_PROGRESS') updateFields.called_at = new Date();
         if (status === 'COMPLETED') updateFields.status = 'COMPLETED';
+        if (status === 'NO_SHOW') updateFields.status = 'NO_SHOW';
 
         const appt = await Appointment.findOneAndUpdate(filter, { $set: updateFields }, { new: true });
         if (!appt) return res.status(404).json({ success: false, message: `Token ${token} not found` });
@@ -361,16 +433,19 @@ exports.getTokenStatus = async (req, res) => {
         const appt = await Appointment.findOne(filter).lean();
         if (!appt) return res.status(404).json({ success: false, message: `Token ${token} not found` });
 
-        // Count how many tokens are ahead in the queue
-        const aheadFilter = {
+        // Position in queue: relative to CHECKED_IN users (who are waiting)
+        const positionFilter = {
             doctor_id: appt.doctor_id,
             appointment_date: queryDate,
             token_number: { $lt: parseInt(token) },
-            token_status: 'WAITING'
+            token_status: 'CHECKED_IN'
         };
-        const patientsAhead = await Appointment.countDocuments(aheadFilter);
+        const positionInQueue = await Appointment.countDocuments(positionFilter);
 
-        // Get doctor availability (ETA if late)
+        // Average consultation time: 10 mins (can be made dynamic)
+        const estWaitTime = (positionInQueue + (appt.token_status === 'CHECKED_IN' ? 0 : 1)) * 10;
+
+        // Get doctor availability
         const avail = await DoctorAvailability.findOne({ doctor_id: appt.doctor_id, date: queryDate }).lean();
 
         res.json({
@@ -381,14 +456,15 @@ exports.getTokenStatus = async (req, res) => {
                 appointment_id: appt.appointment_id,
                 doctor_name: appt.doctor_name,
                 appointment_time: appt.appointment_time,
-                patients_ahead: patientsAhead,
+                position_in_queue: positionInQueue + 1,
+                estimated_wait: `${estWaitTime}m`,
                 doctor_status: avail?.status || 'PRESENT',
                 doctor_eta: avail?.eta_time || null,
                 message: appt.token_status === 'IN_PROGRESS'
                     ? 'Your turn! Please proceed to the doctor.'
-                    : appt.token_status === 'WAITING'
-                        ? `You are #${patientsAhead + 1} in queue`
-                        : `Status: ${appt.token_status}`
+                    : appt.token_status === 'CHECKED_IN'
+                        ? `You are #${positionInQueue + 1} in the active waiting queue`
+                        : `Status: ${appt.token_status}. Please check-in upon arrival.`
             }
         });
     } catch (err) {

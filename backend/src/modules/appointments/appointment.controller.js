@@ -6,7 +6,7 @@ const MRD = require('../../models/MRD');
 const Doctor = require('../../models/Doctor');
 
 const audit = require('../../utils/audit');
-const { toMidnight, extractMobile, normalizeWaId, normalizePhone } = require('../../utils/helpers');
+const { toMidnight, extractMobile, normalizeWaId, normalizePhone, canonicalizeDoctorName, getNextToken } = require('../../utils/helpers');
 const { hashField } = require('../../utils/encryption');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -33,12 +33,20 @@ const resolveDoctorDetails = async ({ doctor_id, doctor_name, doctor_speciality 
             if (!finalSpeciality) finalSpeciality = doc.speciality;
         }
     } else if (doctor_name) {
+        const canonicalName = canonicalizeDoctorName(doctor_name);
         // Try fuzzy name match if no ID provided
-        const doc = await Doctor.findOne({ name: { $regex: new RegExp(`^${doctor_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
+        const doc = await Doctor.findOne({
+            $or: [
+                { name: { $regex: new RegExp(`^${canonicalName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+                { name: { $regex: new RegExp(`^${doctor_name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
+            ]
+        });
         if (doc) {
             finalId = doc.doctor_id;
             if (!finalSpeciality) finalSpeciality = doc.speciality;
-            finalName = doc.name; // Use canonical name
+            finalName = doc.name; // Use canonical name from DB
+        } else {
+            finalName = canonicalName; // Use the canonical version of input if no DB match
         }
     }
     return { finalId, finalName, finalSpeciality };
