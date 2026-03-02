@@ -26,12 +26,14 @@ const resolveDoctor = async (doctor_id, doctor_name) => {
 };
 
 // Helper: generate next token number for a doctor on a given date (exported)
-const getNextToken = (doctor_id, date) => getNextTokenNumber(Appointment, doctor_id, date);
-exports.getNextToken = getNextToken;
+const getNextTokenNumberForDoctor = (doctor_id, date) => getNextTokenNumber(Appointment, doctor_id, date);
+exports.getNextTokenNumberForDoctor = getNextTokenNumberForDoctor;
 
 // ── POST /api/appointments/book-with-token ──────────────────────────
 // Book appointment AND assign a queue token in one step
 exports.bookWithToken = async (req, res) => {
+    let slotReservation = null;
+    let appointmentPersisted = false;
     try {
         const {
             patient_id, wa_id, mobile,
@@ -92,9 +94,34 @@ exports.bookWithToken = async (req, res) => {
         // Generate IDs
         const appointment_id = await generateAppointmentId();
 
+        // 5. Reserve slot first (prevents appointment creation when slot lock fails)
+        const reservedSlot = await SlotAvailability.findOneAndUpdate(
+            {
+                slot_id,
+                slot_date: queryDate,
+                doctor_name: doctor.name,
+                is_booked: false,
+                blocked_by_admin: false
+            },
+            {
+                $set: {
+                    is_booked: true,
+                    appointment_id,
+                    doctor_name: doctor.name,
+                    doctor_id: doctor.doctor_id,
+                    last_updated_at: new Date()
+                }
+            },
+            { upsert: true, new: true }
+        );
+        if (!reservedSlot) {
+            return res.status(409).json({ success: false, message: 'Slot was just taken. Please choose another.' });
+        }
+        slotReservation = { appointment_id, slot_id, slot_date: queryDate, doctor_name: doctor.name };
+
         const token_number = await getNextTokenNumber(Appointment, doctor.doctor_id, queryDate);
 
-        const appointment = await Appointment.create({
+        await Appointment.create({
             appointment_id,
             patient_id: patient.patient_id,
             doctor_id: doctor.doctor_id,
@@ -114,29 +141,7 @@ exports.bookWithToken = async (req, res) => {
             last_updated_at: new Date(),
             last_updated_by: req.user?.username || booking_source
         });
-
-        await appointment.save();
-
-        // 5. Mark slot as booked (Atomic update to prevent race conditions)
-        await SlotAvailability.findOneAndUpdate(
-            {
-                slot_id,
-                slot_date: queryDate,
-                doctor_name: doctor.name,
-                is_booked: false,
-                blocked_by_admin: false
-            },
-            {
-                $set: {
-                    is_booked: true,
-                    appointment_id,
-                    doctor_name: doctor.name,
-                    doctor_id: doctor.doctor_id,
-                    last_updated_at: new Date()
-                }
-            },
-            { upsert: true, new: true }
-        );
+        appointmentPersisted = true;
 
         await audit({
             event_type: 'APPOINTMENT_BOOKED_WITH_TOKEN',
@@ -156,11 +161,29 @@ exports.bookWithToken = async (req, res) => {
                 patient_id: patient.patient_id,
                 child_name: patient.child_name,
                 doctor_name: doctor.name,
+                doctor_id: doctor.doctor_id,
                 appointment_date: queryDate,
                 appointment_time: slot.start_time
             }
         });
     } catch (err) {
+        if (slotReservation && !appointmentPersisted) {
+            try {
+                const SlotAvailability = require('../../models/SlotAvailability');
+                await SlotAvailability.updateOne(
+                    {
+                        slot_id: slotReservation.slot_id,
+                        slot_date: slotReservation.slot_date,
+                        doctor_name: slotReservation.doctor_name,
+                        appointment_id: slotReservation.appointment_id
+                    },
+                    { $set: { is_booked: false, appointment_id: null, last_updated_at: new Date() } }
+                );
+            } catch (rollbackErr) {
+                console.error('[bookWithToken][rollback]', rollbackErr.message);
+            }
+        }
+        if (err.code === 11000) return res.status(409).json({ success: false, message: 'Concurrent booking detected. Please choose another slot.' });
         res.status(500).json({ success: false, error: err.message });
     }
 };
@@ -510,7 +533,7 @@ exports.autoReschedule = async (req, res) => {
         // Generate new appointment ID
         const new_appointment_id = await generateAppointmentId();
 
-        const token_number = await getNextToken(appt.doctor_id, targetDate);
+        const token_number = await getNextTokenNumberForDoctor(appt.doctor_id, targetDate);
 
         const newAppt = await Appointment.create({
             appointment_id: new_appointment_id,

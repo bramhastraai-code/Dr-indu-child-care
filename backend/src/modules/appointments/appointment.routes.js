@@ -33,19 +33,13 @@ const {
 } = require('./token.controller');
 
 const validate = require('../../middleware/validate');
-const { create, bookWhatsapp, update } = require('./appointment.validator');
-const Joi = require('joi');
+const { create, bookWhatsapp, bookForm, update } = require('./appointment.validator');
 const auth = require('../../middleware/auth');
 
 router.use(auth);
 
 // ── Public / Bot routes ──────────────────────────────────────────────
-router.post('/form', validate(create.keys({
-    wa_id: Joi.string().optional(),
-    patient_id: Joi.optional(),
-    mobile: Joi.optional(),
-    visit_type: Joi.string().optional()
-})), bookByForm);
+router.post('/form', validate(bookForm), bookByForm);
 router.post('/whatsapp', validate(bookWhatsapp), bookByWhatsapp);
 router.get('/by-wa/:wa_id', getAppointmentsByWaId);
 

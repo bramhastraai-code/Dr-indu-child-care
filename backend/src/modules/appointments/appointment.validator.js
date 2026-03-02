@@ -4,7 +4,7 @@ const appointmentSchemas = {
     // POST /api/appointments
     create: Joi.object({
         patient_id: Joi.string().trim().required(),
-        doctor_name: Joi.string().trim().min(2).required(),
+        doctor_name: Joi.string().trim().min(2),
         doctor_id: Joi.string().trim(),
         doctor_speciality: Joi.string().trim().allow('', null),
         visit_type: Joi.string().valid('VACCINATION', 'CONSULTATION', 'PULMONARY', 'FOLLOWUP').insensitive().optional(),
@@ -13,21 +13,35 @@ const appointmentSchemas = {
         appointment_mode: Joi.string().valid('ONLINE', 'OFFLINE').insensitive().default('OFFLINE'),
         reason: Joi.string().trim().max(500).allow('', null),
         booking_source: Joi.string().valid('dashboard', 'whatsapp', 'form', 'api').insensitive().default('dashboard')
-    }),
+    }).or('doctor_name', 'doctor_id'),
 
     // POST /api/appointments/whatsapp
     bookWhatsapp: Joi.object({
         wa_id: Joi.string().trim().required(),
         patient_id: Joi.string().trim().allow('', null), // Used to resolve between siblings
         child_name: Joi.string().trim().allow('', null), // Optional hint
-        doctor_name: Joi.string().trim().min(2).required(),
+        doctor_name: Joi.string().trim().min(2),
         doctor_id: Joi.string().trim(),
         doctor_speciality: Joi.string().trim().allow('', null),
         visit_type: Joi.string().valid('VACCINATION', 'CONSULTATION', 'PULMONARY', 'FOLLOWUP').insensitive().optional(),
         appointment_date: Joi.string().required(),
         slot_id: Joi.string().trim().required(),
         reason: Joi.string().trim().max(500).allow('', null)
-    }),
+    }).or('doctor_name', 'doctor_id'),
+
+    // POST /api/appointments/form
+    bookForm: Joi.object({
+        wa_id: Joi.string().trim().allow('', null),
+        mobile: Joi.string().trim().allow('', null),
+        doctor_name: Joi.string().trim().min(2),
+        doctor_id: Joi.string().trim(),
+        doctor_speciality: Joi.string().trim().allow('', null),
+        visit_type: Joi.string().valid('VACCINATION', 'CONSULTATION', 'PULMONARY', 'FOLLOWUP').insensitive().optional(),
+        appointment_date: Joi.string().required(),
+        slot_id: Joi.string().trim().required(),
+        appointment_mode: Joi.string().valid('ONLINE', 'OFFLINE').insensitive().default('OFFLINE'),
+        reason: Joi.string().trim().max(500).allow('', null)
+    }).or('wa_id', 'mobile').or('doctor_name', 'doctor_id'),
 
     // PATCH /api/appointments/:id
     update: Joi.object({
