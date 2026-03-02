@@ -30,7 +30,8 @@ const getNextTokenNumberForDoctor = (doctor_id, date) => getNextTokenNumber(Appo
 exports.getNextTokenNumberForDoctor = getNextTokenNumberForDoctor;
 
 // ── POST /api/appointments/book-with-token ──────────────────────────
-// Book appointment AND assign a queue token in one step
+// Legacy endpoint name kept for backward compatibility.
+// Token is now generated during 24h reminder processing, not at booking time.
 exports.bookWithToken = async (req, res) => {
     let slotReservation = null;
     let appointmentPersisted = false;
@@ -119,8 +120,6 @@ exports.bookWithToken = async (req, res) => {
         }
         slotReservation = { appointment_id, slot_id, slot_date: queryDate, doctor_name: doctor.name };
 
-        const token_number = await getNextTokenNumber(Appointment, doctor.doctor_id, queryDate);
-
         await Appointment.create({
             appointment_id,
             patient_id: patient.patient_id,
@@ -134,8 +133,6 @@ exports.bookWithToken = async (req, res) => {
             reason: reason || null,
             status: 'CONFIRMED',
             booking_source,
-            token_number,
-            token_status: 'WAITING',
             confirmation_sent: true,
             created_at: new Date(),
             last_updated_at: new Date(),
@@ -149,15 +146,16 @@ exports.bookWithToken = async (req, res) => {
             entity_id: appointment_id,
             actor: req.user?.username || booking_source,
             actor_type: 'ADMIN',
-            new_value: { patient_id: patient.patient_id, token_number, doctor_id: doctor.doctor_id }
+            new_value: { patient_id: patient.patient_id, doctor_id: doctor.doctor_id, token_generation_status: 'PENDING_24H_REMINDER' }
         });
 
         res.status(201).json({
             success: true,
             data: {
                 appointment_id,
-                token_number,
-                token_status: 'WAITING',
+                token_number: null,
+                token_status: null,
+                token_generation_status: 'PENDING_24H_REMINDER',
                 patient_id: patient.patient_id,
                 child_name: patient.child_name,
                 doctor_name: doctor.name,
@@ -334,28 +332,7 @@ exports.getNextToken = async (req, res) => {
         );
 
         // Find next patient: Prioritize CHECKED_IN over WAITING, then by check_in_time or token_number
-        const next = await Appointment.findOneAndUpdate(
-            {
-                doctor_id,
-                appointment_date: queryDate,
-                token_status: { $in: ['CHECKED_IN', 'WAITING'] },
-                is_deleted: false
-            },
-            { $set: { token_status: 'IN_PROGRESS', called_at: new Date(), last_updated_at: new Date() } },
-            {
-                sort: {
-                    // High priority: CHECKED_IN patients
-                    token_status: 1, // CHECKED_IN comes before WAITING in default sort if we are lucky, but let's be explicit
-                    // Actually token_status sort is not reliable for enum. 
-                    // We'll use a two-step approach or a complex sort if possible.
-                    // But for simple logic: CHECKED_IN > WAITING.
-                },
-                new: true
-            }
-        ).lean();
-
-        // Since $in doesn't guarantee order, let's refine the findOneAndUpdate
-        // Better: Try to find CHECKED_IN first.
+        // Prefer CHECKED_IN over WAITING.
         let nextPatient = await Appointment.findOneAndUpdate(
             { doctor_id, appointment_date: queryDate, token_status: 'CHECKED_IN', is_deleted: false },
             { $set: { token_status: 'IN_PROGRESS', called_at: new Date(), last_updated_at: new Date() } },
@@ -533,7 +510,7 @@ exports.autoReschedule = async (req, res) => {
         // Generate new appointment ID
         const new_appointment_id = await generateAppointmentId();
 
-        const token_number = await getNextTokenNumberForDoctor(appt.doctor_id, targetDate);
+        const slotTemplate = await Slot.findOne({ slot_id: freeSlot.slot_id }).lean();
 
         const newAppt = await Appointment.create({
             appointment_id: new_appointment_id,
@@ -543,13 +520,13 @@ exports.autoReschedule = async (req, res) => {
             doctor_speciality: appt.doctor_speciality,
             appointment_date: targetDate,
             slot_id: freeSlot.slot_id,
-            appointment_time: freeSlot.custom_start_time || appt.appointment_time,
+            appointment_time: freeSlot.custom_start_time || slotTemplate?.start_time || null,
             visit_type: appt.visit_type,
             reason: reason || `Auto-rescheduled from ${appointment_id} (${appt.status})`,
             status: 'CONFIRMED',
             booking_source: 'dashboard',
-            token_number,
-            token_status: 'WAITING',
+            token_number: null,
+            token_status: null,
             confirmation_sent: false,
             created_at: new Date(),
             last_updated_at: new Date(),
@@ -578,7 +555,8 @@ exports.autoReschedule = async (req, res) => {
                 original_appointment_id: appointment_id,
                 new_appointment_id,
                 new_date: targetDate,
-                token_number,
+                token_number: null,
+                token_generation_status: 'PENDING_24H_REMINDER',
                 slot_id: freeSlot.slot_id
             }
         });
@@ -599,9 +577,8 @@ exports.clearQueue = async (req, res) => {
             {
                 doctor_id,
                 appointment_date: queryDate,
-                token_number: { $ne: null },
                 status: { $in: ['BOOKED', 'CONFIRMED'] },
-                token_status: { $in: ['WAITING', 'CHECKED_IN', 'IN_PROGRESS'] }
+                is_deleted: false
             },
             {
                 $set: {
@@ -628,7 +605,7 @@ exports.clearQueue = async (req, res) => {
             meta: { date: queryDate, cancelled_count: result.modifiedCount }
         });
 
-        res.json({ success: true, message: `Queue cleared for doctor ${doctor_id}. ${result.modifiedCount} tokens cancelled.` });
+        res.json({ success: true, message: `Queue cleared for doctor ${doctor_id}. ${result.modifiedCount} appointments cancelled.` });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

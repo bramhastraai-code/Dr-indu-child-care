@@ -4,9 +4,10 @@ const Patient = require('../../models/Patient');
 const Slot = require('../../models/Slot');
 const MRD = require('../../models/MRD');
 const Doctor = require('../../models/Doctor');
+const SystemConfig = require('../../models/SystemConfig');
 
 const audit = require('../../utils/audit');
-const { toMidnight, extractMobile, normalizeWaId, normalizePhone, canonicalizeDoctorName, getNextToken } = require('../../utils/helpers');
+const { toMidnight, extractMobile, normalizeWaId, normalizePhone, canonicalizeDoctorName } = require('../../utils/helpers');
 const { hashField } = require('../../utils/encryption');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -50,6 +51,196 @@ const resolveDoctorDetails = async ({ doctor_id, doctor_name, doctor_speciality 
         }
     }
     return { finalId, finalName, finalSpeciality };
+};
+
+const parseTimeToMinutes = (timeStr) => {
+    if (!timeStr || typeof timeStr !== 'string') return Number.MAX_SAFE_INTEGER;
+    const [h, m] = timeStr.split(':').map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return Number.MAX_SAFE_INTEGER;
+    return (h * 60) + m;
+};
+
+const assignTokensForDate = async (targetDate) => {
+    const queryDate = toMidnight(targetDate);
+    const dateKey = queryDate.toISOString().split('T')[0];
+    const lockKey = `TOKEN_ASSIGN_LOCK_${dateKey}`;
+    const lockOwner = `pid${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+    const lockUntil = new Date(Date.now() + (2 * 60 * 1000));
+    let lockAcquired = false;
+
+    try {
+        try {
+            await SystemConfig.create({
+                config_key: lockKey,
+                config_value: {
+                    locked: true,
+                    owner: lockOwner,
+                    lock_until: lockUntil
+                },
+                description: 'Token assignment lock for 24h reminder flow',
+                updated_at: new Date(),
+                updated_by: 'SYSTEM_24H_TOKEN'
+            });
+            lockAcquired = true;
+        } catch (lockCreateErr) {
+            if (lockCreateErr.code !== 11000) throw lockCreateErr;
+        }
+
+        if (!lockAcquired) {
+            const stolen = await SystemConfig.findOneAndUpdate(
+                {
+                    config_key: lockKey,
+                    'config_value.lock_until': { $lte: new Date() }
+                },
+                {
+                    $set: {
+                        config_value: {
+                            locked: true,
+                            owner: lockOwner,
+                            lock_until: lockUntil
+                        },
+                        updated_at: new Date(),
+                        updated_by: 'SYSTEM_24H_TOKEN'
+                    }
+                },
+                { new: true }
+            );
+            lockAcquired = Boolean(stolen);
+        }
+
+        if (!lockAcquired) {
+            return { generated: 0, normalized: 0, skipped: true, reason: 'lock_not_acquired' };
+        }
+
+    const activeAppointments = await Appointment.find({
+        appointment_date: queryDate,
+        status: { $in: ['BOOKED', 'CONFIRMED'] },
+        is_deleted: false
+    })
+        .select('_id appointment_id doctor_id doctor_name slot_id appointment_time created_at token_number token_status')
+        .lean();
+
+    if (activeAppointments.length === 0) {
+        return { generated: 0, normalized: 0 };
+    }
+
+    const slotIds = [...new Set(activeAppointments.map(a => a.slot_id).filter(Boolean))];
+    const slots = await Slot.find({ slot_id: { $in: slotIds } })
+        .select('slot_id start_time sort_order')
+        .lean();
+    const slotMap = new Map(slots.map(s => [s.slot_id, s]));
+
+    const groupedByDoctor = new Map();
+    for (const appt of activeAppointments) {
+        const groupKey = appt.doctor_id ? `id:${appt.doctor_id}` : `name:${appt.doctor_name || 'UNKNOWN'}`;
+        if (!groupedByDoctor.has(groupKey)) groupedByDoctor.set(groupKey, []);
+        groupedByDoctor.get(groupKey).push(appt);
+    }
+
+    const now = new Date();
+    const bulkOps = [];
+    let generated = 0;
+    let normalized = 0;
+
+    for (const appointments of groupedByDoctor.values()) {
+        let maxToken = 0;
+        for (const appt of appointments) {
+            if (appt.token_number !== null && appt.token_number !== undefined) {
+                maxToken = Math.max(maxToken, Number(appt.token_number) || 0);
+            }
+        }
+
+        const pendingTokenAppointments = appointments
+            .filter(a => a.token_number === null || a.token_number === undefined)
+            .sort((a, b) => {
+                const aSlot = slotMap.get(a.slot_id);
+                const bSlot = slotMap.get(b.slot_id);
+
+                const aMins = parseTimeToMinutes(aSlot?.start_time || a.appointment_time);
+                const bMins = parseTimeToMinutes(bSlot?.start_time || b.appointment_time);
+                if (aMins !== bMins) return aMins - bMins;
+
+                const aSort = Number.isFinite(aSlot?.sort_order) ? aSlot.sort_order : Number.MAX_SAFE_INTEGER;
+                const bSort = Number.isFinite(bSlot?.sort_order) ? bSlot.sort_order : Number.MAX_SAFE_INTEGER;
+                if (aSort !== bSort) return aSort - bSort;
+
+                const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
+                const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
+                if (aCreated !== bCreated) return aCreated - bCreated;
+
+                return String(a.appointment_id || '').localeCompare(String(b.appointment_id || ''));
+            });
+
+        for (const appt of pendingTokenAppointments) {
+            maxToken += 1;
+            generated += 1;
+            bulkOps.push({
+                updateOne: {
+                    filter: { _id: appt._id },
+                    update: {
+                        $set: {
+                            token_number: maxToken,
+                            token_status: 'WAITING',
+                            last_updated_at: now,
+                            last_updated_by: 'SYSTEM_24H_TOKEN'
+                        }
+                    }
+                }
+            });
+        }
+
+        const missingStatusAppointments = appointments.filter(a =>
+            a.token_number !== null &&
+            a.token_number !== undefined &&
+            !a.token_status
+        );
+        for (const appt of missingStatusAppointments) {
+            normalized += 1;
+            bulkOps.push({
+                updateOne: {
+                    filter: { _id: appt._id },
+                    update: {
+                        $set: {
+                            token_status: 'WAITING',
+                            last_updated_at: now,
+                            last_updated_by: 'SYSTEM_24H_TOKEN'
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    if (bulkOps.length > 0) {
+        await Appointment.bulkWrite(bulkOps, { ordered: false });
+    }
+
+    return { generated, normalized };
+    } finally {
+        if (lockAcquired) {
+            try {
+                await SystemConfig.updateOne(
+                    {
+                        config_key: lockKey,
+                        'config_value.owner': lockOwner
+                    },
+                    {
+                        $set: {
+                            config_value: {
+                                locked: false,
+                                owner: null,
+                                lock_until: new Date(0)
+                            },
+                            updated_at: new Date(),
+                            updated_by: 'SYSTEM_24H_TOKEN'
+                        }
+                    }
+                );
+            } catch (unlockErr) {
+                console.error('[assignTokensForDate][unlock]', unlockErr.message);
+            }
+        }
+    }
 };
 
 const enrichAppointment = async (a) => {
@@ -261,8 +452,6 @@ exports.createAppointment = async (req, res) => {
         }
         slotReservation = { appointment_id, slot_id, slot_date: queryDate, doctor_name: finalDoctorName };
 
-        const token_number = await getNextToken(Appointment, finalDoctorId, queryDate);
-
         await Appointment.create({
             appointment_id,
             patient_id: patient.patient_id,
@@ -277,8 +466,6 @@ exports.createAppointment = async (req, res) => {
             reason: reason || null,
             status: 'CONFIRMED',
             booking_source,
-            token_number,
-            token_status: 'WAITING',
             confirmation_sent: true,
             created_at: new Date(),
             last_updated_at: new Date(),
@@ -312,8 +499,9 @@ exports.createAppointment = async (req, res) => {
                 doctor_id: finalDoctorId,
                 visit_type: visit_type || 'CONSULTATION',
                 appointment_mode: appointment_mode || 'OFFLINE',
-                token_number,
-                token_status: 'WAITING',
+                token_number: null,
+                token_status: null,
+                token_generation_status: 'PENDING_24H_REMINDER',
                 slot: slot ? { slot_id, label: slot.slot_label || slot.display_label } : { slot_id }
             }
         });
@@ -422,6 +610,13 @@ exports.updateAppointment = async (req, res) => {
                 doctor_name: doctor_name || appt.doctor_name,
                 doctor_speciality: doctor_speciality || appt.doctor_speciality
             });
+            const currentDate = toMidnight(appt.appointment_date);
+            const currentDocName = appt.doctor_name || null;
+            const effectiveNewDocName = newDocName || null;
+            const scheduleChanged =
+                (newDate.getTime() !== currentDate.getTime()) ||
+                (newSlotId !== appt.slot_id) ||
+                (effectiveNewDocName !== currentDocName);
 
             // Check if target doctor is active
             const Doctor = require('../../models/Doctor');
@@ -429,83 +624,98 @@ exports.updateAppointment = async (req, res) => {
             if (targetDoc && !targetDoc.is_active) {
                 return res.status(400).json({ success: false, message: `Doctor ${newDocName} is currently inactive and cannot accept appointments.` });
             }
-
-            // Prevent rescheduling to past
-            const today = toMidnight(new Date());
-            if (newDate < today) {
-                return res.status(400).json({ success: false, message: 'Cannot reschedule to a past date.' });
+            if (doctor_speciality !== undefined || doctor_name || doctor_id) {
+                updates.doctor_speciality = newDocSpeciality;
             }
-
-            const slotTemplate = await Slot.findOne({ slot_id: newSlotId });
-            if (!slotTemplate) return res.status(404).json({ success: false, message: 'Target slot template not found.' });
-
-            const now = new Date();
-            const isToday = newDate.getUTCFullYear() === now.getUTCFullYear() &&
-                newDate.getUTCMonth() === now.getUTCMonth() &&
-                newDate.getUTCDate() === now.getUTCDate();
-
-            if (isToday) {
-                const availability = await SlotAvailability.findOne({ slot_id: newSlotId, slot_date: newDate, doctor_name: newDocName });
-                const [h, m] = (availability?.custom_start_time || slotTemplate.start_time).split(':');
-                const slotTimeInMinutes = parseInt(h) * 60 + parseInt(m);
-
-                // Convert 'now' to clinic local time (IST +5:30)
-                const clinicNow = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
-                const nowInMinutes = clinicNow.getUTCHours() * 60 + clinicNow.getUTCMinutes();
-
-                if (slotTimeInMinutes < nowInMinutes - 5) {
-                    return res.status(400).json({ success: false, message: 'The target slot time has already passed for today.' });
+            if (scheduleChanged) {
+                // Prevent rescheduling to past
+                const today = toMidnight(new Date());
+                if (newDate < today) {
+                    return res.status(400).json({ success: false, message: 'Cannot reschedule to a past date.' });
                 }
-            }
 
-            // Check if target slot is free
-            const slotTaken = await SlotAvailability.findOne({
-                slot_id: newSlotId,
-                slot_date: newDate,
-                doctor_name: newDocName,
-                $or: [{ is_booked: true }, { blocked_by_admin: true }]
-            });
-            if (slotTaken && slotTaken.appointment_id !== appointment_id) {
-                return res.status(409).json({ success: false, message: 'Target slot is already booked. Choose another.' });
-            }
+                const slotTemplate = await Slot.findOne({ slot_id: newSlotId });
+                if (!slotTemplate) return res.status(404).json({ success: false, message: 'Target slot template not found.' });
 
-            // Free old slot
-            await SlotAvailability.updateOne(
-                { slot_id: appt.slot_id, slot_date: appt.appointment_date, doctor_name: appt.doctor_name },
-                { $set: { is_booked: false, appointment_id: null } }
-            );
+                const now = new Date();
+                const isToday = newDate.getUTCFullYear() === now.getUTCFullYear() &&
+                    newDate.getUTCMonth() === now.getUTCMonth() &&
+                    newDate.getUTCDate() === now.getUTCDate();
 
-            // Book new slot
-            const newAvail = await SlotAvailability.findOneAndUpdate(
-                {
+                if (isToday) {
+                    const availability = await SlotAvailability.findOne({ slot_id: newSlotId, slot_date: newDate, doctor_name: newDocName });
+                    const [h, m] = (availability?.custom_start_time || slotTemplate.start_time).split(':');
+                    const slotTimeInMinutes = parseInt(h) * 60 + parseInt(m);
+
+                    // Convert 'now' to clinic local time (IST +5:30)
+                    const clinicNow = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+                    const nowInMinutes = clinicNow.getUTCHours() * 60 + clinicNow.getUTCMinutes();
+
+                    if (slotTimeInMinutes < nowInMinutes - 5) {
+                        return res.status(400).json({ success: false, message: 'The target slot time has already passed for today.' });
+                    }
+                }
+
+                // Check if target slot is free
+                const slotTaken = await SlotAvailability.findOne({
                     slot_id: newSlotId,
                     slot_date: newDate,
                     doctor_name: newDocName,
-                    is_booked: false,
-                    blocked_by_admin: false
-                },
-                {
-                    $set: {
-                        is_booked: true,
-                        appointment_id,
+                    $or: [{ is_booked: true }, { blocked_by_admin: true }]
+                });
+                if (slotTaken && slotTaken.appointment_id !== appointment_id) {
+                    return res.status(409).json({ success: false, message: 'Target slot is already booked. Choose another.' });
+                }
+
+                // Reserve target slot first to avoid dropping existing slot on race conditions.
+                const newAvail = await SlotAvailability.findOneAndUpdate(
+                    {
+                        slot_id: newSlotId,
+                        slot_date: newDate,
                         doctor_name: newDocName,
-                        doctor_id: newDocId
-                    }
-                },
-                { upsert: true, new: true }
-            );
+                        is_booked: false,
+                        blocked_by_admin: false
+                    },
+                    {
+                        $set: {
+                            is_booked: true,
+                            appointment_id,
+                            doctor_name: newDocName,
+                            doctor_id: newDocId
+                        }
+                    },
+                    { upsert: true, new: true }
+                );
 
-            if (!newAvail) {
-                return res.status(409).json({ success: false, message: 'Target slot was just taken. Choose another.' });
+                if (!newAvail) {
+                    return res.status(409).json({ success: false, message: 'Target slot was just taken. Choose another.' });
+                }
+
+                // Release old slot only after new slot reservation succeeds.
+                await SlotAvailability.updateOne(
+                    {
+                        slot_id: appt.slot_id,
+                        slot_date: appt.appointment_date,
+                        doctor_name: appt.doctor_name,
+                        appointment_id
+                    },
+                    { $set: { is_booked: false, appointment_id: null } }
+                );
+
+                const newSlot = await Slot.findOne({ slot_id: newSlotId });
+                updates.appointment_date = newDate;
+                updates.slot_id = newSlotId;
+                updates.appointment_time = newSlot?.start_time || null;
+                updates.doctor_name = newDocName;
+                updates.doctor_id = newDocId;
+                updates.doctor_speciality = newDocSpeciality;
+                updates.token_number = null;
+                updates.token_status = null;
+                updates.reminder_24h_sent = false;
+                updates.reminder_24h_sent_at = null;
+                updates.reminder_2h_sent = false;
+                updates.reminder_2h_sent_at = null;
             }
-
-            const newSlot = await Slot.findOne({ slot_id: newSlotId });
-            updates.appointment_date = newDate;
-            updates.slot_id = newSlotId;
-            updates.appointment_time = newSlot?.start_time || null;
-            updates.doctor_name = newDocName;
-            updates.doctor_id = newDocId;
-            updates.doctor_speciality = newDocSpeciality;
         }
 
         if (visit_type) updates.visit_type = visit_type;
@@ -768,8 +978,6 @@ exports.bookByWhatsapp = async (req, res) => {
         }
         slotReservation = { appointment_id, slot_id, slot_date: queryDate, doctor_name: finalDoctorName };
 
-        const token_number = await getNextToken(Appointment, finalDoctorId, queryDate);
-
         await Appointment.create({
             appointment_id,
             patient_id: patient.patient_id,
@@ -785,8 +993,6 @@ exports.bookByWhatsapp = async (req, res) => {
             wa_id: normalized,          // stored for traceability
             status: 'CONFIRMED',
             booking_source: 'whatsapp',
-            token_number,
-            token_status: 'WAITING',
             confirmation_sent: true,
             created_at: new Date(),
             last_updated_at: new Date(),
@@ -815,8 +1021,9 @@ exports.bookByWhatsapp = async (req, res) => {
                 doctor_speciality: finalDoctorSpeciality,
                 doctor_id: finalDoctorId,
                 visit_type: visit_type || 'CONSULTATION',
-                token_number,
-                token_status: 'WAITING',
+                token_number: null,
+                token_status: null,
+                token_generation_status: 'PENDING_24H_REMINDER',
                 slot: slot ? { slot_id, label: slot.slot_label || slot.display_label } : { slot_id }
             }
         });
@@ -951,8 +1158,6 @@ exports.bookByForm = async (req, res) => {
         }
         slotReservation = { appointment_id, slot_id, slot_date: queryDate, doctor_name: finalDoctorName };
 
-        const token_number = await getNextToken(Appointment, finalDoctorId, queryDate);
-
         await Appointment.create({
             appointment_id,
             patient_id: patient.patient_id,
@@ -968,8 +1173,6 @@ exports.bookByForm = async (req, res) => {
             wa_id: normalized,
             status: 'CONFIRMED',
             booking_source: 'form',
-            token_number,
-            token_status: 'WAITING',
             confirmation_sent: true,
             created_at: new Date(),
             last_updated_at: new Date(),
@@ -998,8 +1201,9 @@ exports.bookByForm = async (req, res) => {
                 doctor_speciality: finalDoctorSpeciality,
                 doctor_id: finalDoctorId,
                 visit_type: visit_type || 'CONSULTATION',
-                token_number,
-                token_status: 'WAITING',
+                token_number: null,
+                token_status: null,
+                token_generation_status: 'PENDING_24H_REMINDER',
                 slot: slot ? { slot_id, label: slot.slot_label || slot.display_label } : { slot_id }
             }
         });
@@ -1033,15 +1237,23 @@ exports.getPending24hReminders = async (req, res) => {
         const tomorrow = new Date();
         tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
         const queryDate = toMidnight(tomorrow);
+        const tokenGeneration = await assignTokensForDate(queryDate);
 
         const appointments = await Appointment.find({
             appointment_date: queryDate,
             status: { $in: ['BOOKED', 'CONFIRMED'] },
-            reminder_24h_sent: false
+            reminder_24h_sent: false,
+            is_deleted: false
         }).sort({ slot_id: 1 });
 
         const enriched = await Promise.all(appointments.map(enrichAppointment));
-        res.json({ success: true, date: queryDate, count: enriched.length, data: enriched });
+        res.json({
+            success: true,
+            date: queryDate,
+            count: enriched.length,
+            token_generation: tokenGeneration,
+            data: enriched
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -1058,7 +1270,7 @@ exports.markReminderSent = async (req, res) => {
             return res.status(400).json({ success: false, message: "Type must be '24h' or '2h'" });
         }
 
-        const appointment = await Appointment.findOne({ appointment_id });
+        let appointment = await Appointment.findOne({ appointment_id });
         if (!appointment) return res.status(404).json({ success: false, message: 'Appointment not found' });
 
         // Validation: Check if the appointment date matches the reminder type
@@ -1071,6 +1283,9 @@ exports.markReminderSent = async (req, res) => {
             if (appDate.getTime() !== tomorrow.getTime()) {
                 console.warn(`[Reminder Warning] Marking 24h reminder for appointment on ${appDate.toISOString().split('T')[0]}, but today is ${now.toISOString().split('T')[0]}`);
                 // We'll allow it but log a warning, as sometimes manual overrides or late triggers happen
+            } else if (appointment.token_number === null || appointment.token_number === undefined || !appointment.token_status) {
+                await assignTokensForDate(appointment.appointment_date);
+                appointment = await Appointment.findOne({ appointment_id });
             }
         } else if (type === '2h') {
             const today = toMidnight(new Date());

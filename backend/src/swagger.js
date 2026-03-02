@@ -420,11 +420,35 @@ const spec = {
         '/api/appointments/{appointment_id}/no-show': {
             patch: { tags: ['Appointments'], summary: 'Mark as No-Show (Penalty logged)', parameters: [pathParam('appointment_id', 'APT-2026-00001')], responses: { 200: { description: 'Recorded' } } }
         },
+        
+        '/api/appointments/reminders/pending-24h': {
+            get: {
+                tags: ['Appointments'],
+                summary: 'List tomorrow appointments pending 24h reminder and generate deferred tokens',
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+        '/api/appointments/reminders/pending-2h': {
+            get: {
+                tags: ['Appointments'],
+                summary: 'List today appointments pending 2h reminder',
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+        '/api/appointments/reminders/{appointment_id}/mark-sent': {
+            patch: {
+                tags: ['Appointments'],
+                summary: 'Mark reminder as sent for one appointment',
+                parameters: [pathParam('appointment_id', 'APT-2026-00001')],
+                requestBody: body({ type: '24h' }),
+                responses: { 200: { description: 'Marked as sent' } }
+            }
+        },
 
         // ══ TOKEN SYSTEM ══════════════════════════════════════════════════════
         '/api/appointments/book-with-token': {
             post: {
-                tags: ['Token System'], summary: 'Book appointment + Assign Queue Token',
+                tags: ['Token System'], summary: 'Book appointment (token deferred to 24h reminder)',
                 requestBody: body({
                     patient_id: 'DICC-2026-0001',
                     doctor_id: 'DOC-00007',
@@ -433,7 +457,7 @@ const spec = {
                     visit_type: 'CONSULTATION',
                     booking_source: 'dashboard'
                 }),
-                responses: { 201: { description: 'Booked + Token generated' } }
+                responses: { 201: { description: 'Booked. token_number remains null until /api/appointments/reminders/pending-24h generates queue tokens' } }
             }
         },
         '/api/appointments/daily-tokens': {
@@ -668,10 +692,10 @@ const spec = {
             }
         },
         '/api/messages/messages/pending': {
-            get: { tags: ['Messaging', 'WhatsApp Bot Integration'], summary: 'Poll pending messages (For bot)', responses: { 200: { description: 'List of formatted messages' } } }
+            get: { tags: ['Messaging'], summary: 'Poll pending messages for external sender (n8n/WATI)', responses: { 200: { description: 'List of formatted messages' } } }
         },
         '/api/messages/messages/{queue_id}/status': {
-            patch: { tags: ['Messaging', 'WhatsApp Bot Integration'], summary: 'Update delivery status', parameters: [pathParam('queue_id', 'MQ-123')], requestBody: body({ status: 'SENT' }), responses: { 200: { description: 'Updated' } } }
+            patch: { tags: ['Messaging'], summary: 'Update delivery status from external sender (n8n/WATI)', parameters: [pathParam('queue_id', 'MQ-123')], requestBody: body({ status: 'SENT' }), responses: { 200: { description: 'Updated' } } }
         },
 
         // ══ MRD ═══════════════════════════════════════════════════════════════
@@ -888,3 +912,4 @@ module.exports = (app) => {
     console.log('📚 Swagger docs (Prod)  → https://api-dr-indu-child-care.brahmaastra.ai/api-docs');
     //console.log('📚 Swagger docs (Local) → http://localhost:5000/api-docs');
 };
+
