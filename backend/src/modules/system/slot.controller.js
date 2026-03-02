@@ -336,13 +336,15 @@ exports.getSlotConfig = async (req, res) => {
         const Doctor = require('../../models/Doctor');
         const activeDoctors = await Doctor.find({ is_active: true }).sort({ name: 1 });
 
-        // 1. Identify all unique names assigned to slots (Deduplicated Doctors + Categories)
+        // 1. Identify all unique names assigned to slots (Identities)
         const identities = new Map(); // Canonical -> DisplayName
 
         activeDoctors.forEach(dr => {
             const canonical = canonicalizeDoctorName(dr.name);
-            // Use the Doctor's original name as the display key
-            identities.set(canonical, dr.name);
+            // Deduplicate: If we already have this canonical name, stick to the prioritized display name
+            if (!identities.has(canonical)) {
+                identities.set(canonical, dr.name);
+            }
         });
 
         slots.forEach(s => {
@@ -350,44 +352,63 @@ exports.getSlotConfig = async (req, res) => {
                 for (const key of s.days_by_doctor.keys()) {
                     const canonical = canonicalizeDoctorName(key);
                     if (!identities.has(canonical)) {
-                        // This is likely a category (e.g. "VACCINATION")
                         identities.set(canonical, key);
                     }
                 }
             }
         });
 
-        const allIdentityNames = Array.from(identities.values());
-
-        // 2. Build the result for each identity
-        const results = Array.from(allIdentityNames).map(name => {
-            const safeName = name.replace(/\./g, '');
-
+        // 2. Build the result for each unique identity
+        const results = Array.from(identities.entries()).map(([canonical, originalName]) => {
             const assignedSlots = slots.filter(s => {
-                const perDr = s.days_by_doctor?.get(safeName) || s.days_by_doctor?.get(name);
+                // Check direct assignment in days_by_doctor
+                let perDr = null;
+                if (s.days_by_doctor) {
+                    for (const [key, val] of s.days_by_doctor.entries()) {
+                        if (canonicalizeDoctorName(key) === canonical) {
+                            perDr = val;
+                            break;
+                        }
+                    }
+                }
+
                 if (perDr && perDr.length > 0) return true;
 
-                // If it's a general slot (no specific doctor assigned), every REAL doctor gets it
-                const otherDrs = Array.from(s.days_by_doctor?.keys() || []).filter(n => n !== safeName && n !== name);
-                const isRealDoctor = activeDoctors.some(d => d.name === name || d.name.replace(/\./g, '') === name);
+                // If general slot (no specific assignment), all real doctors get it
+                const isRealDoctor = activeDoctors.some(d => canonicalizeDoctorName(d.name) === canonical);
+                const hasAnySpecificDoctor = s.days_by_doctor &&
+                    Array.from(s.days_by_doctor.values()).some(val => val && val.length > 0);
 
-                if (otherDrs.length === 0 && isRealDoctor) return true;
+                if (!hasAnySpecificDoctor && isRealDoctor) return true;
                 return false;
-            }).map(s => ({
-                slot_id: s.slot_id,
-                label: s.slot_label,
-                time: `${s.start_time} - ${s.end_time}`,
-                session: s.session,
-                active_days: s.days_by_doctor?.get(safeName) || s.days_by_doctor?.get(name) || s.days_of_week
-            }));
+            }).map(s => {
+                // Find correct active days for this specific identity
+                let activeDays = s.days_of_week;
+                if (s.days_by_doctor) {
+                    for (const [key, val] of s.days_by_doctor.entries()) {
+                        if (canonicalizeDoctorName(key) === canonical) {
+                            activeDays = val;
+                            break;
+                        }
+                    }
+                }
+
+                return {
+                    slot_id: s.slot_id,
+                    label: s.slot_label,
+                    time: `${s.start_time} - ${s.end_time}`,
+                    session: s.session,
+                    active_days: activeDays
+                };
+            });
 
             return {
-                name: name,
-                is_doctor: activeDoctors.some(d => d.name === name || d.name.replace(/\./g, '') === name),
+                name: originalName,
+                is_doctor: activeDoctors.some(d => canonicalizeDoctorName(d.name) === canonical),
                 slot_count: assignedSlots.length,
                 slots: assignedSlots
             };
-        }).filter(item => item.slot_count > 0); // Only return names that actually have slots
+        }).filter(item => item.slot_count > 0 && item.is_doctor); // Only return doctors with slots
 
         res.json({
             success: true,

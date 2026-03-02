@@ -17,7 +17,8 @@ const {
     getBotReplies,
     saveMessage,
     getMessages,
-    updateMessage
+    updateMessage,
+    getBotWorkflowStatus
 } = require('./bot.controller');
 const auth = require('../../middleware/auth');
 
@@ -88,5 +89,7 @@ router.get('/analytics/daily', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+
+router.get('/workflow-status/:wa_id', getBotWorkflowStatus);
 
 module.exports = router;

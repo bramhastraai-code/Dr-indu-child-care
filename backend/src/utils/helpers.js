@@ -52,16 +52,22 @@ const normalizePhone = (phone) => extractMobile(phone);
  */
 const canonicalizeDoctorName = (name) => {
     if (!name) return null;
-    let n = name.trim().replace(/\s+/g, ' ');
-    // Handle "Dr ", "Dr.", "dr ", "dr." prefixes
-    const drRegex = /^(dr\.?\s+)(.*)$/i;
-    const match = n.match(drRegex);
-    if (match) {
-        n = 'Dr. ' + match[2].trim();
-    } else if (!n.toLowerCase().startsWith('dr.')) {
-        n = 'Dr. ' + n;
+    // 1. Remove all dots and handle prefix
+    let n = name.replace(/\./g, ' ').replace(/\s+/g, ' ').trim();
+
+    // 2. Identify if it starts with "dr" (case insensitive)
+    if (n.toLowerCase().startsWith('dr')) {
+        // Strip out "dr" or "dr " part
+        if (n.toLowerCase().startsWith('dr ')) {
+            n = n.slice(3).trim();
+        } else {
+            // For cases like "DrIndu"
+            n = n.slice(2).trim();
+        }
     }
-    return n;
+
+    // 3. Re-add standardized prefix "Dr. "
+    return 'Dr. ' + n;
 };
 
 /**
