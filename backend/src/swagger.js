@@ -674,7 +674,6 @@ const spec = {
                 requestBody: body({
                     wa_id: '9876543210',
                     current_state: 'APPOINTMENT_CONFIRMED',
-                    stage_number: 3,
                     session_data: {
                         last_action: 'BOOKING',
                         selected_doctor: 'Dr. Indu',
@@ -706,34 +705,50 @@ const spec = {
                 responses: { 201: { description: 'Logged' } }
             }
         },
-        '/api/bot/chat/history/{wa_id}': { get: { tags: ['WhatsApp Bot Integration'], summary: 'Session history (enriched)', parameters: [pathParam('wa_id', '9876543210')], responses: { 200: { description: 'History' } } } },
-        '/api/bot/workflow-stages': {
-            get: {
-                tags: ['WhatsApp Bot Integration'],
-                summary: 'Get Bot Workflow Definitions (1-5)',
-                description: 'Returns the master list of all workflow stages (ID, Name, Key).',
-                responses: { 200: { description: 'Success' } }
+        '/api/bot/chat/bot-reply': {
+            post: {
+                tags: ['WhatsApp Bot Integration'], summary: 'Log Bot specific reply (Upsert)',
+                requestBody: body({
+                    wa_id: '9876543210',
+                    message: 'Sure! I can help you with that. Which date would you like?',
+                    bot_name: 'Dr. Indu Assistant'
+                }),
+                responses: { 201: { description: 'Logged' } }
             }
         },
-        '/api/bot/workflow-status/{wa_id}': {
+        '/api/bot/chat/bot-replies/{wa_id}': {
             get: {
-                tags: ['WhatsApp Bot Integration'],
-                summary: '📊 Dedicated Bot Workflow Status Tracker',
-                description: 'Returns the user\'s current progress (number, name, key, and state).',
+                tags: ['WhatsApp Bot Integration'], summary: 'Get current bot reply record',
                 parameters: [pathParam('wa_id', '9876543210')],
-                responses: { 200: { description: 'Success' } }
+                responses: { 200: { description: 'Single Record' } }
+            }
+        },
+
+        '/api/bot/messages': {
+            post: {
+                tags: ['WhatsApp Bot Integration'], summary: 'Store simple message',
+                requestBody: body({ wa_id: '9876543210', message: 'Hello', sender: 'user' }),
+                responses: { 201: { description: 'Stored' } }
+            }
+        },
+        '/api/bot/messages/{wa_id}': {
+            get: {
+                tags: ['WhatsApp Bot Integration'], summary: 'Get simple message history',
+                parameters: [pathParam('wa_id', '9876543210')],
+                responses: { 200: { description: 'List' } }
+            }
+        },
+        '/api/bot/messages/{message_id}': {
+            patch: {
+                tags: ['WhatsApp Bot Integration'], summary: 'Update message content',
+                parameters: [pathParam('message_id', '69a55f7c87...')],
+                requestBody: body({ message: 'Updated text' }),
+                responses: { 200: { description: 'Updated' } }
             }
         },
 
         // ══ SYSTEM ════════════════════════════════════════════════════════════
         '/api/system/health': { get: { tags: ['System'], summary: 'Health check', responses: { 200: { description: 'Healthy' } } } },
-        '/api/system/workflow-stages': {
-            get: {
-                tags: ['System'],
-                summary: 'Get system workflow stages',
-                responses: { 200: { description: 'Success' } }
-            }
-        },
         '/api/config': {
             get: { tags: ['System'], summary: 'Get system settings', responses: { 200: { description: 'Success' } } },
             patch: { tags: ['System'], summary: 'Update system settings', requestBody: body({ clinic_name: 'DICC' }, false), responses: { 200: { description: 'Updated' } } }

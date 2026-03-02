@@ -20,10 +20,6 @@ const BotSessionSchema = new mongoose.Schema({
         type: String,
         default: 'S00_WELCOME'
     },
-    stage_number: {
-        type: Number,
-        default: 1
-    },
     session_data: {
         type: mongoose.Schema.Types.Mixed,
         default: {}

@@ -7,13 +7,8 @@ const audit = require('../../utils/audit');
 const { normalizeWaId, normalizePhone } = require('../../utils/helpers');
 const { hashField } = require('../../utils/encryption');
 
-const WORKFLOW_STAGES = [
-    { stage_number: 1, name: "General Talk", key: "GENERAL_TALK" },
-    { stage_number: 2, name: "Patient Registration", key: "PATIENT_REGISTRATION" },
-    { stage_number: 3, name: "Appointment Booking", key: "APPOINTMENT_BOOKING" },
-    { stage_number: 4, name: "Appointment Reminder", key: "APPOINTMENT_REMINDER" },
-    { stage_number: 5, name: "Appointment Completed", key: "APPOINTMENT_COMPLETED" }
-];
+
+
 
 // Helper: normalise wa_id — accept wa_id or wa_number in body
 const getWaId = (body) => body ? normalizeWaId(body.wa_id || body.wa_number) : null;
@@ -69,7 +64,6 @@ exports.createSession = async (req, res) => {
             wa_id,
             patient_id: patients.length === 1 ? patients[0].patient_id : null,
             current_state: initialState,
-            stage_number: req.body.stage_number || (patients.length > 0 ? 1 : 1), // Default to 1
             session_data: {
                 source: source || 'WATI',
                 existing_patient: patients.length > 0,
@@ -90,7 +84,7 @@ exports.createSession = async (req, res) => {
 exports.updateSession = async (req, res) => {
     try {
         const wa_id = getWaId(req.body);
-        const { current_state, session_data, retry_count, patient_id, stage_number } = req.body || {};
+        const { current_state, session_data, retry_count, patient_id } = req.body || {};
         if (!wa_id) return res.status(400).json({ success: false, message: 'wa_id is required' });
 
         const session = await BotSession.findOneAndUpdate(
@@ -101,7 +95,6 @@ exports.updateSession = async (req, res) => {
                     session_data,
                     retry_count,
                     patient_id,
-                    stage_number,
                     last_activity_at: new Date(),
                     expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000)
                 }
@@ -382,6 +375,8 @@ exports.getUnregisteredInteractions = async (req, res) => {
     }
 };
 
+
+
 // @desc    Get session history
 // @route   GET /api/bot/session/:wa_id/history
 exports.getSessionHistory = async (req, res) => {
@@ -393,53 +388,113 @@ exports.getSessionHistory = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-// @desc    Get Bot Workflow Stages (Stage Definitions 1-5)
-// @route   GET /api/bot/workflow-stages
-exports.getWorkflowStages = (req, res) => {
+
+// @desc    Log Bot reply (Single record per number - Upsert)
+// @route   POST /api/bot/chat/bot-reply
+exports.logBotReply = async (req, res) => {
     try {
-        res.status(200).json({
+        const { wa_id, wa_number, message, bot_name = 'Bot' } = req.body || {};
+        const target = normalizeWaId(wa_id || wa_number);
+
+        if (!target || !message) {
+            return res.status(400).json({ success: false, message: 'wa_id and message are required' });
+        }
+
+        const chat = await BotChatHistory.findOneAndUpdate(
+            { wa_id: target, sender: 'bot' },
+            { $set: { message, user_name: bot_name, timestamp: new Date() } },
+            { upsert: true, new: true, lean: true }
+        );
+
+        res.status(201).json({
             success: true,
-            count: WORKFLOW_STAGES.length,
-            data: WORKFLOW_STAGES
+            data: {
+                wa_id: chat.wa_id,
+                message: chat.message,
+                bot_name: chat.user_name,
+                timestamp: chat.timestamp
+            }
         });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 };
 
-// @desc    Get comprehensive workflow status (User Progress + Stages List)
-// @route   GET /api/bot/workflow-status/:wa_id
-exports.getBotWorkflowStatus = async (req, res) => {
+// @desc    Get Bot reply (Returns single clean object)
+// @route   GET /api/bot/chat/bot-replies/:wa_id
+exports.getBotReplies = async (req, res) => {
     try {
-        const wa_id = normalizeWaId(req.params.wa_id);
-        const session = await BotSession.findOne({
-            wa_id,
-            is_active: true,
-            expires_at: { $gt: new Date() }
-        }).sort({ created_at: -1 });
+        const target = normalizeWaId(req.params.wa_id);
+        const reply = await BotChatHistory.findOne({ wa_id: target, sender: 'bot' }).lean();
 
-        const currentStageNumber = session ? session.stage_number : 0;
-        const currentStageInfo = WORKFLOW_STAGES.find(s => s.stage_number === currentStageNumber) || {
-            name: "Not Started",
-            key: "IDLE"
-        };
+        if (!reply) {
+            return res.status(404).json({ success: false, message: 'No bot reply found' });
+        }
 
-        // Check registration status
-        const patients = await findPatientsByWa(wa_id);
-        const is_registered = patients.length > 0;
-
-        res.status(200).json({
+        res.json({
             success: true,
-            wa_id,
-            is_registered,
-            current_stage: {
-                number: currentStageNumber,
-                name: currentStageInfo.name,
-                key: currentStageInfo.key,
-                state: session ? session.current_state : "IDLE",
-                last_active: session ? session.last_activity_at : null
+            data: {
+                wa_id: reply.wa_id,
+                message: reply.message,
+                bot_name: reply.user_name,
+                timestamp: reply.timestamp
             }
         });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Simple Store Message (No lookups)
+// @route   POST /api/bot/messages
+exports.saveMessage = async (req, res) => {
+    try {
+        const { wa_id, message, sender = 'user' } = req.body || {};
+        if (!wa_id || !message) {
+            return res.status(400).json({ success: false, message: 'wa_id and message are required' });
+        }
+
+        const chat = await BotChatHistory.create({
+            wa_id: normalizeWaId(wa_id),
+            message,
+            sender,
+            user_name: sender === 'bot' ? 'Bot' : 'User'
+        });
+
+        res.status(201).json({ success: true, data: chat });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Simple Get Messages
+// @route   GET /api/bot/messages/:wa_id
+exports.getMessages = async (req, res) => {
+    try {
+        const wa_id = normalizeWaId(req.params.wa_id);
+        const messages = await BotChatHistory.find({ wa_id }).sort({ timestamp: -1 }).limit(50);
+        res.json({ success: true, data: messages });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Update Message by _id
+// @route   PATCH /api/bot/messages/:message_id
+exports.updateMessage = async (req, res) => {
+    try {
+        const { message_id } = req.params;
+        const { message } = req.body || {};
+        if (!message) return res.status(400).json({ success: false, message: 'Updated message content is required' });
+
+        const updated = await BotChatHistory.findByIdAndUpdate(
+            message_id,
+            { $set: { message, updated_at: new Date() } },
+            { new: true }
+        );
+
+        if (!updated) return res.status(404).json({ success: false, message: 'Message not found' });
+        res.json({ success: true, data: updated });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

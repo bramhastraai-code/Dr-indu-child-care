@@ -122,24 +122,4 @@ exports.getAuditLogs = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
-// @desc    Fetch workflow stages
-// @route   GET /api/system/workflow-stages
-exports.getWorkflowStages = async (req, res) => {
-    try {
-        const stages = [
-            { stage_number: 1, name: "General Talk", key: "GENERAL_TALK" },
-            { stage_number: 2, name: "Patient Registration", key: "PATIENT_REGISTRATION" },
-            { stage_number: 3, name: "Appointment Booking", key: "APPOINTMENT_BOOKING" },
-            { stage_number: 4, name: "Appointment Reminder", key: "APPOINTMENT_REMINDER" },
-            { stage_number: 5, name: "Appointment Completed", key: "APPOINTMENT_COMPLETED" }
-        ];
 
-        res.status(200).json({
-            success: true,
-            count: stages.length,
-            data: stages
-        });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-};
