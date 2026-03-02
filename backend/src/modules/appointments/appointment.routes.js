@@ -36,46 +36,44 @@ const validate = require('../../middleware/validate');
 const { create, bookWhatsapp, bookForm, update } = require('./appointment.validator');
 const auth = require('../../middleware/auth');
 
-router.use(auth);
-
-// ── Public / Bot routes ──────────────────────────────────────────────
+// ── Public / Bot routes (No Dashboard Auth Required) ─────────────────
 router.post('/form', validate(bookForm), bookByForm);
-router.post('/whatsapp', validate(bookWhatsapp), bookByWhatsapp);
-router.get('/by-wa/:wa_id', getAppointmentsByWaId);
+router.post('/whatsapp', auth, validate(bookWhatsapp), bookByWhatsapp);
+router.get('/by-wa/:wa_id', auth, getAppointmentsByWaId);
 
-// ── Static routes (must come BEFORE /:appointment_id) ───────────────
+// ── Static routes (must come BEFORE /:appointment_id) ─────────────────
 // Reminder endpoints
-router.get('/reminders/pending-24h', getPending24hReminders);
-router.get('/reminders/pending-2h', getPending2hReminders);
-router.patch('/reminders/:appointment_id/mark-sent', markReminderSent);
+router.get('/reminders/pending-24h', auth, getPending24hReminders);
+router.get('/reminders/pending-2h', auth, getPending2hReminders);
+router.patch('/reminders/:appointment_id/mark-sent', auth, markReminderSent);
 
 // Stats & summary
-router.get('/stats', getAppointmentStats);
-router.get('/today', getTodayAppointments);
+router.get('/stats', auth, getAppointmentStats);
+router.get('/today', auth, getTodayAppointments);
 
 // ── Token / Queue System ─────────────────────────────────────────────
-router.post('/book-with-token', bookWithToken);
-router.get('/daily-tokens', getDailyTokens);
-router.get('/clinic-display', getClinicDisplay);
-router.post('/auto-reschedule', autoReschedule);
-router.delete('/queue/:doctor_id', clearQueue);
+router.post('/book-with-token', auth, bookWithToken);
+router.get('/daily-tokens', auth, getDailyTokens);
+router.get('/clinic-display', getClinicDisplay); // Public
+router.post('/auto-reschedule', auth, autoReschedule);
+router.delete('/queue/:doctor_id', auth, clearQueue);
 
 // Token param routes (before /:appointment_id)
-router.get('/next-token/:doctor_id', getNextToken);
-router.post('/token/:token/check-in', checkIn);
-router.patch('/token/:token/status', updateTokenStatus);
-router.get('/token-status/:token', getTokenStatus);
+router.get('/next-token/:doctor_id', auth, getNextToken);
+router.post('/token/:token/check-in', auth, checkIn);
+router.patch('/token/:token/status', auth, updateTokenStatus);
+router.get('/token-status/:token', getTokenStatus); // Public patient self-check
 
 // ── Core CRUD ────────────────────────────────────────────────────────
-router.get('/', getAppointments);
-router.post('/', validate(create), createAppointment);
+router.get('/', auth, getAppointments);
+router.post('/', auth, validate(create), createAppointment);
 
 // ── Appointment-specific routes ──────────────────────────────────────
-router.get('/:appointment_id', getAppointmentById);
-router.patch('/:appointment_id', validate(update), updateAppointment);
-router.patch('/:appointment_id/cancel', cancelAppointment);
-router.patch('/:appointment_id/complete', completeAppointment);
-router.patch('/:appointment_id/no-show', markNoShow);
-router.delete('/:appointment_id', deleteAppointment);
+router.get('/:appointment_id', auth, getAppointmentById);
+router.patch('/:appointment_id', auth, validate(update), updateAppointment);
+router.patch('/:appointment_id/cancel', auth, cancelAppointment);
+router.patch('/:appointment_id/complete', auth, completeAppointment);
+router.patch('/:appointment_id/no-show', auth, markNoShow);
+router.delete('/:appointment_id', auth, deleteAppointment);
 
 module.exports = router;

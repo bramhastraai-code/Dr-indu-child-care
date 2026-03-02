@@ -128,7 +128,7 @@ exports.bookWithToken = async (req, res) => {
             doctor_speciality: doctor.speciality,
             appointment_date: queryDate,
             slot_id,
-            appointment_time: slot.start_time,
+            appointment_time: reservedSlot?.custom_start_time || slot.start_time,
             visit_type: visit_type || 'CONSULTATION',
             reason: reason || null,
             status: 'CONFIRMED',
@@ -277,7 +277,7 @@ exports.getClinicDisplay = async (req, res) => {
         const activeTokens = await Appointment.find({
             appointment_date: queryDate,
             token_number: { $ne: null },
-            token_status: { $in: ['IN_PROGRESS', 'WAITING'] },
+            token_status: { $in: ['IN_PROGRESS', 'WAITING', 'CHECKED_IN'] },
             is_deleted: false
         }).sort({ doctor_id: 1, token_number: 1 }).lean();
 
@@ -293,7 +293,11 @@ exports.getClinicDisplay = async (req, res) => {
             const avail = availMap[dr.doctor_id] || { status: 'PRESENT', current_token: 0, eta_time: 'No Delay' };
             const drTokens = activeTokens.filter(t => t.doctor_id === dr.doctor_id);
             const nowServing = drTokens.find(t => t.token_status === 'IN_PROGRESS');
-            const waiting = drTokens.filter(t => t.token_status === 'CHECKED_IN');
+            // Priority: CHECKED_IN tokens first, then WAITING tokens, both sorted by token_number
+            const waiting = [
+                ...drTokens.filter(t => t.token_status === 'CHECKED_IN'),
+                ...drTokens.filter(t => t.token_status === 'WAITING')
+            ];
 
             return {
                 doctor_id: dr.doctor_id,
@@ -397,8 +401,14 @@ exports.updateTokenStatus = async (req, res) => {
 
         const updateFields = { token_status: status, last_updated_at: new Date() };
         if (status === 'IN_PROGRESS') updateFields.called_at = new Date();
-        if (status === 'COMPLETED') updateFields.status = 'COMPLETED';
-        if (status === 'NO_SHOW') updateFields.status = 'NO_SHOW';
+        if (status === 'COMPLETED') {
+            updateFields.status = 'COMPLETED';
+            updateFields.completed_at = new Date();
+        }
+        if (status === 'NO_SHOW') {
+            updateFields.status = 'NO_SHOW';
+            updateFields.no_show_at = new Date();
+        }
 
         const appt = await Appointment.findOneAndUpdate(filter, { $set: updateFields }, { new: true });
         if (!appt) return res.status(404).json({ success: false, message: `Token ${token} not found` });

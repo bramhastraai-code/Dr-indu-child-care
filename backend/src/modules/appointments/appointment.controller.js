@@ -112,110 +112,113 @@ const assignTokensForDate = async (targetDate) => {
             return { generated: 0, normalized: 0, skipped: true, reason: 'lock_not_acquired' };
         }
 
-    const activeAppointments = await Appointment.find({
-        appointment_date: queryDate,
-        status: { $in: ['BOOKED', 'CONFIRMED'] },
-        is_deleted: false
-    })
-        .select('_id appointment_id doctor_id doctor_name slot_id appointment_time created_at token_number token_status')
-        .lean();
+        // 1. Load ALL appointments for the day to correctly calculate max tokens and grouping
+        const allAppointments = await Appointment.find({
+            appointment_date: queryDate,
+            is_deleted: false
+        })
+            .select('_id appointment_id status doctor_id doctor_name slot_id appointment_time created_at token_number token_status')
+            .lean();
 
-    if (activeAppointments.length === 0) {
-        return { generated: 0, normalized: 0 };
-    }
+        if (allAppointments.length === 0) {
+            return { generated: 0, normalized: 0 };
+        }
 
-    const slotIds = [...new Set(activeAppointments.map(a => a.slot_id).filter(Boolean))];
-    const slots = await Slot.find({ slot_id: { $in: slotIds } })
-        .select('slot_id start_time sort_order')
-        .lean();
-    const slotMap = new Map(slots.map(s => [s.slot_id, s]));
+        // 2. Load Slot templates for sorting
+        const slotIds = [...new Set(allAppointments.map(a => a.slot_id).filter(Boolean))];
+        const slots = await Slot.find({ slot_id: { $in: slotIds } })
+            .select('slot_id start_time sort_order')
+            .lean();
+        const slotMap = new Map(slots.map(s => [s.slot_id, s]));
 
-    const groupedByDoctor = new Map();
-    for (const appt of activeAppointments) {
-        const groupKey = appt.doctor_id ? `id:${appt.doctor_id}` : `name:${appt.doctor_name || 'UNKNOWN'}`;
-        if (!groupedByDoctor.has(groupKey)) groupedByDoctor.set(groupKey, []);
-        groupedByDoctor.get(groupKey).push(appt);
-    }
+        // 3. Group by doctor consistently using ID or canonicalized name
+        const groupedByDoctor = new Map();
+        for (const appt of allAppointments) {
+            let doctorKey = appt.doctor_id || (appt.doctor_name ? canonicalizeDoctorName(appt.doctor_name) : 'UNKNOWN');
+            if (!groupedByDoctor.has(doctorKey)) groupedByDoctor.set(doctorKey, []);
+            groupedByDoctor.get(doctorKey).push(appt);
+        }
 
-    const now = new Date();
-    const bulkOps = [];
-    let generated = 0;
-    let normalized = 0;
+        const now = new Date();
+        const bulkOps = [];
+        let generated = 0;
+        let normalized = 0;
 
-    for (const appointments of groupedByDoctor.values()) {
-        let maxToken = 0;
-        for (const appt of appointments) {
-            if (appt.token_number !== null && appt.token_number !== undefined) {
-                maxToken = Math.max(maxToken, Number(appt.token_number) || 0);
+        for (const appointments of groupedByDoctor.values()) {
+            let maxToken = 0;
+            for (const appt of appointments) {
+                if (appt.token_number !== null && appt.token_number !== undefined) {
+                    maxToken = Math.max(maxToken, Number(appt.token_number) || 0);
+                }
+            }
+
+            // Only assign tokens to BOOKED/CONFIRMED appointments that don't have one yet
+            const pendingTokenAppointments = appointments
+                .filter(a => (a.status === 'BOOKED' || a.status === 'CONFIRMED') && (a.token_number === null || a.token_number === undefined))
+                .sort((a, b) => {
+                    const aSlot = slotMap.get(a.slot_id);
+                    const bSlot = slotMap.get(b.slot_id);
+
+                    const aMins = parseTimeToMinutes(aSlot?.start_time || a.appointment_time);
+                    const bMins = parseTimeToMinutes(bSlot?.start_time || b.appointment_time);
+                    if (aMins !== bMins) return aMins - bMins;
+
+                    const aSort = Number.isFinite(aSlot?.sort_order) ? aSlot.sort_order : Number.MAX_SAFE_INTEGER;
+                    const bSort = Number.isFinite(bSlot?.sort_order) ? bSlot.sort_order : Number.MAX_SAFE_INTEGER;
+                    if (aSort !== bSort) return aSort - bSort;
+
+                    const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
+                    const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
+                    if (aCreated !== bCreated) return aCreated - bCreated;
+
+                    return String(a.appointment_id || '').localeCompare(String(b.appointment_id || ''));
+                });
+
+            for (const appt of pendingTokenAppointments) {
+                maxToken += 1;
+                generated += 1;
+                bulkOps.push({
+                    updateOne: {
+                        filter: { _id: appt._id },
+                        update: {
+                            $set: {
+                                token_number: maxToken,
+                                token_status: 'WAITING',
+                                last_updated_at: now,
+                                last_updated_by: 'SYSTEM_24H_TOKEN'
+                            }
+                        }
+                    }
+                });
+            }
+
+            const missingStatusAppointments = appointments.filter(a =>
+                a.token_number !== null &&
+                a.token_number !== undefined &&
+                !a.token_status
+            );
+            for (const appt of missingStatusAppointments) {
+                normalized += 1;
+                bulkOps.push({
+                    updateOne: {
+                        filter: { _id: appt._id },
+                        update: {
+                            $set: {
+                                token_status: 'WAITING',
+                                last_updated_at: now,
+                                last_updated_by: 'SYSTEM_24H_TOKEN'
+                            }
+                        }
+                    }
+                });
             }
         }
 
-        const pendingTokenAppointments = appointments
-            .filter(a => a.token_number === null || a.token_number === undefined)
-            .sort((a, b) => {
-                const aSlot = slotMap.get(a.slot_id);
-                const bSlot = slotMap.get(b.slot_id);
-
-                const aMins = parseTimeToMinutes(aSlot?.start_time || a.appointment_time);
-                const bMins = parseTimeToMinutes(bSlot?.start_time || b.appointment_time);
-                if (aMins !== bMins) return aMins - bMins;
-
-                const aSort = Number.isFinite(aSlot?.sort_order) ? aSlot.sort_order : Number.MAX_SAFE_INTEGER;
-                const bSort = Number.isFinite(bSlot?.sort_order) ? bSlot.sort_order : Number.MAX_SAFE_INTEGER;
-                if (aSort !== bSort) return aSort - bSort;
-
-                const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
-                const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
-                if (aCreated !== bCreated) return aCreated - bCreated;
-
-                return String(a.appointment_id || '').localeCompare(String(b.appointment_id || ''));
-            });
-
-        for (const appt of pendingTokenAppointments) {
-            maxToken += 1;
-            generated += 1;
-            bulkOps.push({
-                updateOne: {
-                    filter: { _id: appt._id },
-                    update: {
-                        $set: {
-                            token_number: maxToken,
-                            token_status: 'WAITING',
-                            last_updated_at: now,
-                            last_updated_by: 'SYSTEM_24H_TOKEN'
-                        }
-                    }
-                }
-            });
+        if (bulkOps.length > 0) {
+            await Appointment.bulkWrite(bulkOps, { ordered: false });
         }
 
-        const missingStatusAppointments = appointments.filter(a =>
-            a.token_number !== null &&
-            a.token_number !== undefined &&
-            !a.token_status
-        );
-        for (const appt of missingStatusAppointments) {
-            normalized += 1;
-            bulkOps.push({
-                updateOne: {
-                    filter: { _id: appt._id },
-                    update: {
-                        $set: {
-                            token_status: 'WAITING',
-                            last_updated_at: now,
-                            last_updated_by: 'SYSTEM_24H_TOKEN'
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    if (bulkOps.length > 0) {
-        await Appointment.bulkWrite(bulkOps, { ordered: false });
-    }
-
-    return { generated, normalized };
+        return { generated, normalized };
     } finally {
         if (lockAcquired) {
             try {
@@ -462,7 +465,7 @@ exports.createAppointment = async (req, res) => {
             doctor_speciality: finalDoctorSpeciality,
             appointment_date: queryDate,
             slot_id,
-            appointment_time: slot?.start_time || null,
+            appointment_time: avail?.custom_start_time || slot?.start_time || null,
             reason: reason || null,
             status: 'CONFIRMED',
             booking_source,
@@ -705,7 +708,7 @@ exports.updateAppointment = async (req, res) => {
                 const newSlot = await Slot.findOne({ slot_id: newSlotId });
                 updates.appointment_date = newDate;
                 updates.slot_id = newSlotId;
-                updates.appointment_time = newSlot?.start_time || null;
+                updates.appointment_time = newAvail?.custom_start_time || newSlot?.start_time || null;
                 updates.doctor_name = newDocName;
                 updates.doctor_id = newDocId;
                 updates.doctor_speciality = newDocSpeciality;
@@ -1168,7 +1171,7 @@ exports.bookByForm = async (req, res) => {
             doctor_id: finalDoctorId,
             appointment_date: queryDate,
             slot_id,
-            appointment_time: slot?.start_time || null,
+            appointment_time: finalAvail?.custom_start_time || slot?.start_time || null,
             reason: reason || null,
             wa_id: normalized,
             status: 'CONFIRMED',

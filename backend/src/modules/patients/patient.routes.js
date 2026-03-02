@@ -18,8 +18,8 @@ const validate = require('../../middleware/validate');
 const { register, update } = require('./patient.validator');
 const auth = require('../../middleware/auth');
 
-// ── Public / Bot routes (Protected by API Key or JWT) ───────────────
-router.post('/form', auth, validate(register), registerFromForm);
+// ── Public / Bot routes (No Dashboard Auth Required) ─────────────────
+router.post('/form', validate(register), registerFromForm);
 router.post('/whatsapp', auth, validate(register), registerFromWhatsapp);
 router.get('/by-wa/:wa_id', auth, getPatientByWaId);
 

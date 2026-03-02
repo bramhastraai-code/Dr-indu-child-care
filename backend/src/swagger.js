@@ -420,7 +420,7 @@ const spec = {
         '/api/appointments/{appointment_id}/no-show': {
             patch: { tags: ['Appointments'], summary: 'Mark as No-Show (Penalty logged)', parameters: [pathParam('appointment_id', 'APT-2026-00001')], responses: { 200: { description: 'Recorded' } } }
         },
-        
+
         '/api/appointments/reminders/pending-24h': {
             get: {
                 tags: ['Appointments'],
@@ -884,11 +884,16 @@ const spec = {
             }
         },
         '/api/system/health': { get: { tags: ['System'], summary: 'Health check', responses: { 200: { description: 'Healthy' } } } },
-        '/api/config': {
+        '/api/system/config': {
             get: { tags: ['System'], summary: 'Get system settings', responses: { 200: { description: 'Success' } } },
-            patch: { tags: ['System'], summary: 'Update system settings', requestBody: body({ clinic_name: 'DICC' }, false), responses: { 200: { description: 'Updated' } } }
+            put: { tags: ['System'], summary: 'Update system settings', requestBody: body({ clinic_name: 'Dr. Indu Child Care' }, false), responses: { 200: { description: 'Updated' } } }
         },
-        '/api/audit/logs': { get: { tags: ['System'], summary: 'Get system audit logs', responses: { 200: { description: 'Logs list' } } } },
+        '/api/system/audit-logs': { get: { tags: ['System'], summary: 'Get system audit logs', responses: { 200: { description: 'Logs list' } } } },
+        '/api/config': {
+            get: { tags: ['System'], summary: 'Get system settings (Generic)', responses: { 200: { description: 'Success' } } },
+            patch: { tags: ['System'], summary: 'Update system settings (Generic)', requestBody: body({ clinic_name: 'Dr. Indu Child Care' }, false), responses: { 200: { description: 'Updated' } } }
+        },
+        '/api/audit/logs': { get: { tags: ['System'], summary: 'Get system audit logs (Generic)', responses: { 200: { description: 'Logs list' } } } },
         '/api/notifications': { get: { tags: ['System'], summary: 'List notifications', responses: { 200: { description: 'Success' } } } },
         '/api/notifications/{id}/mark-read': { patch: { tags: ['System'], summary: 'Mark alert read', parameters: [pathParam('id', 'N1')], responses: { 200: { description: 'Success' } } } },
         '/api/reminders/schedule': { post: { tags: ['System'], summary: 'Schedule a manual reminder', requestBody: body({ appointment_id: 'APT1' }), responses: { 201: { description: 'Scheduled' } } } },
