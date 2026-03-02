@@ -69,7 +69,7 @@ const spec = {
         `,
     },
     servers: [
-        //{ url: 'http://localhost:5000/', description: 'Local Development' },
+        { url: 'http://localhost:5000/', description: 'Local Development' },
         { url: 'https://api-dr-indu-child-care.brahmaastra.ai/', description: 'Production Server' }
     ],
     components: {},
@@ -307,7 +307,7 @@ const spec = {
         },
         '/api/patients/by-wa/{wa_id}': {
             get: {
-                tags: ['WhatsApp Bot Integration'],
+                tags: ['Patients'],
                 summary: 'Lookup patient by WhatsApp Number',
                 parameters: [pathParam('wa_id', '9876543210')],
                 responses: {
@@ -368,7 +368,7 @@ const spec = {
         },
         '/api/appointments/whatsapp': {
             post: {
-                tags: ['WhatsApp Bot Integration'], summary: 'Book via WhatsApp bot (wa_id)',
+                tags: ['Appointments'], summary: 'Book via WhatsApp bot (wa_id)',
                 requestBody: body({
                     wa_id: '9876543210',
                     doctor_name: 'Dr. Indu',
@@ -383,9 +383,13 @@ const spec = {
         },
         '/api/appointments/by-wa/{wa_id}': {
             get: {
-                tags: ['WhatsApp Bot Integration'],
+                tags: ['Appointments'],
                 summary: 'Lookup upcoming appointments by WhatsApp number',
-                parameters: [pathParam('wa_id', '9876543210')],
+                parameters: [
+                    pathParam('wa_id', '9876543210'),
+                    queryParam('days', '14', 'Optional window (days from today). If omitted, returns all upcoming appointments.'),
+                    queryParam('limit', '50', 'Optional max rows (cap 200).')
+                ],
                 responses: { 200: { description: 'Success' } }
             }
         },
@@ -467,7 +471,7 @@ const spec = {
         },
         '/api/appointments/token-status/{token}': {
             get: {
-                tags: ['Token System', 'WhatsApp Bot Integration'], summary: 'Patient Self-Check (Position)',
+                tags: ['Token System'], summary: 'Patient Self-Check (Position)',
                 parameters: [pathParam('token', '1'), queryParam('doctor_id', '', 'Doctor ID (Required)', true), queryParam('date', '2026-06-15')],
                 responses: { 200: { description: 'Queue position' } }
             }
@@ -486,7 +490,7 @@ const spec = {
 
         // ══ DOCTORS ═══════════════════════════════════════════════════════════
         '/api/doctors': {
-            get: { tags: ['Doctors', 'WhatsApp Bot Integration'], summary: 'List all doctors', responses: { 200: { description: 'Success' } } },
+            get: { tags: ['Doctors'], summary: 'List all doctors', responses: { 200: { description: 'Success' } } },
             post: {
                 tags: ['Doctors'], summary: 'Create doctor profile',
                 requestBody: body({
@@ -530,7 +534,7 @@ const spec = {
         },
         '/api/doctor/availability/{doctor_id}': {
             get: {
-                tags: ['Doctor Availability', 'WhatsApp Bot Integration'], summary: 'Real-time status and queue counts',
+                tags: ['Doctor Availability'], summary: 'Real-time status and queue counts',
                 parameters: [pathParam('doctor_id', 'DOC-00007'), queryParam('date', '2026-06-15')],
                 responses: { 200: { description: 'Success' } }
             }
@@ -572,7 +576,7 @@ const spec = {
         // ══ SLOTS ═════════════════════════════════════════════════════════════
         '/api/slots/available': {
             get: {
-                tags: ['Slots', 'WhatsApp Bot Integration'], summary: 'Get available slots',
+                tags: ['Slots'], summary: 'Get available slots',
                 parameters: [queryParam('doctor_name', 'Dr. Indu', null, true), queryParam('date', '2026-06-15', null, true)],
                 responses: {
                     200: {
@@ -793,25 +797,69 @@ const spec = {
                 responses: { 200: { description: 'Updated' } }
             }
         },
-        '/api/bot/workflow-status/{wa_id}': {
+        '/api/bot/doctors': {
             get: {
                 tags: ['WhatsApp Bot Integration'],
-                summary: '📊 Dedicated Bot Workflow Status Tracker',
-                description: 'Returns the user\'s current progress (number, name, key, and state).',
-                parameters: [pathParam('wa_id', '9876543210')],
+                summary: '📋 Minimal doctor list for Bot',
+                description: 'Returns only id, name, and speciality of active doctors.',
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+        '/api/bot/doctor-availability/{doctor_id}': {
+            get: {
+                tags: ['WhatsApp Bot Integration'],
+                summary: '🏥 Real-time Doctor Status & Queue',
+                description: 'Get presence, current token, and queue counts (waiting, in-progress).',
+                parameters: [pathParam('doctor_id', 'DOC-00007'), queryParam('date', '2026-06-15')],
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+        '/api/bot/slots/available': {
+            get: {
+                tags: ['WhatsApp Bot Integration'],
+                summary: '📅 Get Available Booking Slots',
+                description: 'Returns available time slots for a specific doctor on a given date.',
+                parameters: [queryParam('doctor_id', 'DOC-00007', null, true), queryParam('date', '2026-06-15', null, true)],
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+        '/api/bot/slots/available-dates': {
+            get: {
+                tags: ['WhatsApp Bot Integration'],
+                summary: '🗓️ Bot: Get Available Dates (Next Weeks)',
+                description: 'Returns future dates that have at least one available slot (default 14 days, up to 31).',
+                parameters: [
+                    queryParam('doctor_id', 'DOC-00007', null, true),
+                    queryParam('doctor_name', 'Dr. Indu'),
+                    queryParam('days', '14')
+                ],
                 responses: { 200: { description: 'Success' } }
             }
         },
 
-        // ══ SYSTEM ════════════════════════════════════════════════════════════
-        '/api/system/health': { get: { tags: ['System'], summary: 'Health check', responses: { 200: { description: 'Healthy' } } } },
-        '/api/system/workflow-stages': {
+        '/api/bot/appointments/by-wa/{wa_id}': {
             get: {
-                tags: ['System'],
-                summary: 'Get system workflow stages',
+                tags: ['WhatsApp Bot Integration'],
+                summary: '🔍 Bot: Lookup upcoming appointments',
+                description: 'Returns upcoming confirmed appointments for a given WhatsApp ID.',
+                parameters: [
+                    pathParam('wa_id', '9876543210'),
+                    queryParam('days', '14', 'Optional window (days from today). If omitted, returns all upcoming appointments.'),
+                    queryParam('limit', '50', 'Optional max rows (cap 200).')
+                ],
                 responses: { 200: { description: 'Success' } }
             }
         },
+        '/api/bot/appointments/token-status/{token}': {
+            get: {
+                tags: ['WhatsApp Bot Integration'],
+                summary: '⏳ Bot: Check Queue Position',
+                description: 'Get position in queue, estimated wait time, and doctor status for a given token.',
+                parameters: [pathParam('token', '1'), queryParam('doctor_id', 'DOC-00007', 'Required', true), queryParam('date', '2026-06-15', 'Optional')],
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+        '/api/system/health': { get: { tags: ['System'], summary: 'Health check', responses: { 200: { description: 'Healthy' } } } },
         '/api/config': {
             get: { tags: ['System'], summary: 'Get system settings', responses: { 200: { description: 'Success' } } },
             patch: { tags: ['System'], summary: 'Update system settings', requestBody: body({ clinic_name: 'DICC' }, false), responses: { 200: { description: 'Updated' } } }
@@ -837,6 +885,6 @@ module.exports = (app) => {
             filter: true,
         }
     }));
-    console.log('📚 Swagger docs (Prod)  → https://api-dr-indu-child-care.brahmaastra.ai/api-docs');
-    //console.log('📚 Swagger docs (Local) → http://localhost:5000/api-docs');
+    //console.log('📚 Swagger docs (Prod)  → https://api-dr-indu-child-care.brahmaastra.ai/api-docs');
+    console.log('📚 Swagger docs (Local) → http://localhost:5000/api-docs');
 };

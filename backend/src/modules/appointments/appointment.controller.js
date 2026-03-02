@@ -570,7 +570,10 @@ exports.getTodayAppointments = async (req, res) => {
 exports.getAppointmentsByWaId = async (req, res) => {
     try {
         const rawWaId = req.params.wa_id;
-        const normalized = normalizeWaId(rawWaId);
+        const parsedDays = Number.parseInt(req.query.days, 10);
+        const parsedLimit = Number.parseInt(req.query.limit, 10);
+        const maxDays = Number.isFinite(parsedDays) && parsedDays > 0 ? Math.min(parsedDays, 90) : null;
+        const maxLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 200) : null;
         const wa_hash = hashField(normalizePhone(extractMobile(rawWaId)));
 
         const patient = await Patient.findOne({
@@ -581,11 +584,22 @@ exports.getAppointmentsByWaId = async (req, res) => {
             return res.status(404).json({ success: false, message: `No patient found for wa_id ${rawWaId}` });
         }
 
-        const appointments = await Appointment.find({
+        const today = toMidnight(new Date());
+        const dateFilter = { $gte: today };
+        if (maxDays) {
+            const upper = new Date(today);
+            upper.setUTCDate(upper.getUTCDate() + (maxDays - 1));
+            dateFilter.$lte = upper;
+        }
+
+        let appointmentsQuery = Appointment.find({
             patient_id: patient.patient_id,
             status: { $in: ['BOOKED', 'CONFIRMED'] },
-            appointment_date: { $gte: toMidnight(new Date()) }
-        }).sort({ appointment_date: 1 }).limit(5);
+            appointment_date: dateFilter
+        }).sort({ appointment_date: 1, slot_id: 1 });
+        if (maxLimit) appointmentsQuery = appointmentsQuery.limit(maxLimit);
+
+        const appointments = await appointmentsQuery;
 
         const enriched = await Promise.all(appointments.map(enrichAppointment));
         res.json({
@@ -593,6 +607,7 @@ exports.getAppointmentsByWaId = async (req, res) => {
             patient_id: patient.patient_id,
             child_name: patient.child_name,
             mobile: patient.mobile || extractMobile(rawWaId),
+            filters: { days: maxDays, limit: maxLimit },
             data: enriched
         });
     } catch (err) {

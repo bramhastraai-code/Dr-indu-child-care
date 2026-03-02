@@ -18,9 +18,22 @@ const {
     saveMessage,
     getMessages,
     updateMessage,
-    getBotWorkflowStatus
+    getDoctorsMinimal,
+    getDoctorAvailabilityBot,
+    getAvailableSlotsBot,
+    getAvailableDatesBot,
+    getAppointmentsByWaBot,
+    getTokenStatusBot
 } = require('./bot.controller');
 const auth = require('../../middleware/auth');
+
+// ── Public Routes (No Auth) ──────────────────────────────────────────
+router.get('/doctors', getDoctorsMinimal);
+router.get('/doctor-availability/:doctor_id', getDoctorAvailabilityBot);
+router.get('/slots/available', getAvailableSlotsBot);
+router.get('/slots/available-dates', getAvailableDatesBot);
+router.get('/appointments/by-wa/:wa_id', getAppointmentsByWaBot);
+router.get('/appointments/token-status/:token', getTokenStatusBot);
 
 router.use(auth);
 
@@ -90,6 +103,6 @@ router.get('/analytics/daily', async (req, res) => {
     }
 });
 
-router.get('/workflow-status/:wa_id', getBotWorkflowStatus);
+// router.get('/workflow-status/:wa_id', getBotWorkflowStatus);
 
 module.exports = router;

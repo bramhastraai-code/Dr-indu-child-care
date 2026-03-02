@@ -118,8 +118,18 @@ const connectDoctorToSlots = async (doctorName, days) => {
 // GET /api/doctors
 exports.getDoctors = async (req, res) => {
     try {
-        const doctors = await Doctor.find({}).sort({ name: 1 });
-        res.json({ success: true, data: doctors });
+        const { all } = req.query;
+        const query = all === 'true' ? {} : { is_active: true };
+
+        const doctors = await Doctor.find(query)
+            .select('name doctor_id speciality -_id')
+            .sort({ name: 1 });
+
+        res.json({
+            success: true,
+            count: doctors.length,
+            data: doctors
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

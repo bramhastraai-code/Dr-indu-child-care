@@ -27,7 +27,14 @@ exports.getAvailableSlots = async (req, res) => {
 
             // Fallback to name if ID not found or not provided
             if (!targetDoctor && doctor_name) {
-                targetDoctor = await Doctor.findOne({ name: doctor_name, is_active: true });
+                const canonical = canonicalizeDoctorName(doctor_name);
+                targetDoctor = await Doctor.findOne({
+                    $or: [
+                        { name: { $regex: new RegExp(`^${doctor_name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+                        { name: { $regex: new RegExp(`^${canonical.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
+                    ],
+                    is_active: true
+                });
             }
 
             if (!targetDoctor) return res.status(404).json({ success: false, message: 'Doctor not found or inactive' });

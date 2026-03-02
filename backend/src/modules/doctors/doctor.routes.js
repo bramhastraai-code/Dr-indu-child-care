@@ -13,15 +13,15 @@ const validate = require('../../middleware/validate');
 const { createDoctor: createSchema, updateDoctor: updateSchema } = require('./doctor.validator');
 const auth = require('../../middleware/auth');
 
+// ── Public Routes (No Auth) ──────────────────────────────────────────────────
+router.get('/', getDoctors);
+router.get('/:doctor_id/schedule', getDoctorSchedule);
+
+// ── Protected Routes (Auth Required) ─────────────────────────────────────────
 router.use(auth);
 
-// All doctor endpoints — public (no auth required)
-router.get('/', getDoctors);
 router.post('/', validate(createSchema), createDoctor);
-
-router.get('/:doctor_id/schedule', getDoctorSchedule);
 router.patch('/:doctor_id/schedule', updateDoctorSchedule);
-
 router.get('/:doctor_id', getDoctorById);
 router.patch('/:doctor_id', validate(updateSchema), updateDoctor);
 router.delete('/:doctor_id', deleteDoctor);
