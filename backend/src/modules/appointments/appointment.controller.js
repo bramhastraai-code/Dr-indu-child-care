@@ -236,6 +236,7 @@ exports.createAppointment = async (req, res) => {
 
         // 4. Create appointment
         const appointment_id = await generateAppointmentId();
+        const token_number = await getNextToken(Appointment, finalDoctorId, queryDate);
 
         await Appointment.create({
             appointment_id,
@@ -251,6 +252,8 @@ exports.createAppointment = async (req, res) => {
             reason: reason || null,
             status: 'CONFIRMED',
             booking_source,
+            token_number,
+            token_status: 'WAITING',
             confirmation_sent: true,
             created_at: new Date(),
             last_updated_at: new Date(),
@@ -705,6 +708,7 @@ exports.bookByWhatsapp = async (req, res) => {
 
         const slot = await Slot.findOne({ slot_id });
         const appointment_id = await generateAppointmentId();
+        const token_number = await getNextToken(Appointment, finalDoctorId, queryDate);
 
         await Appointment.create({
             appointment_id,
@@ -721,6 +725,8 @@ exports.bookByWhatsapp = async (req, res) => {
             wa_id: normalized,          // stored for traceability
             status: 'CONFIRMED',
             booking_source: 'whatsapp',
+            token_number,
+            token_status: 'WAITING',
             confirmation_sent: true,
             created_at: new Date(),
             last_updated_at: new Date(),
@@ -860,6 +866,7 @@ exports.bookByForm = async (req, res) => {
 
         const slot = await Slot.findOne({ slot_id });
         const appointment_id = await generateAppointmentId();
+        const token_number = await getNextToken(Appointment, finalDoctorId, queryDate);
 
         await Appointment.create({
             appointment_id,
@@ -873,8 +880,11 @@ exports.bookByForm = async (req, res) => {
             slot_id,
             appointment_time: slot?.start_time || null,
             reason: reason || null,
+            wa_id: normalized,
             status: 'CONFIRMED',
             booking_source: 'form',
+            token_number,
+            token_status: 'WAITING',
             confirmation_sent: true,
             created_at: new Date(),
             last_updated_at: new Date(),
@@ -1069,6 +1079,44 @@ exports.markNoShow = async (req, res) => {
         });
 
         res.json({ success: true, message: 'Appointment marked as no-show' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// ── DELETE /api/appointments/:appointment_id ──────────────────────────────────
+exports.deleteAppointment = async (req, res) => {
+    try {
+        const { appointment_id } = req.params;
+        const actor = req.user ? req.user.username : 'ADMIN';
+
+        const appt = await Appointment.findOneAndUpdate(
+            { appointment_id, is_deleted: false },
+            { $set: { is_deleted: true, deleted_at: new Date(), deleted_by: actor } },
+            { new: true }
+        );
+
+        if (!appt) {
+            return res.status(404).json({ success: false, message: 'Appointment not found' });
+        }
+
+        // Release the slot if it was booked
+        if (appt.slot_id && appt.appointment_date) {
+            await SlotAvailability.updateOne(
+                { slot_id: appt.slot_id, slot_date: appt.appointment_date, appointment_id },
+                { $set: { is_booked: false, appointment_id: null, last_updated_at: new Date() } }
+            );
+        }
+
+        await audit({
+            event_type: 'APPOINTMENT_DELETED',
+            entity_type: 'appointment',
+            entity_id: appointment_id,
+            actor,
+            actor_type: req.user ? req.user.role : 'ADMIN'
+        });
+
+        res.json({ success: true, message: 'Appointment deleted successfully' });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

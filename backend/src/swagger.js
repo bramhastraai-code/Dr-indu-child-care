@@ -69,7 +69,7 @@ const spec = {
         `,
     },
     servers: [
-        { url: 'http://localhost:5000/', description: 'Local Development' },
+        //{ url: 'http://localhost:5000/', description: 'Local Development' },
         { url: 'https://api-dr-indu-child-care.brahmaastra.ai/', description: 'Production Server' }
     ],
     components: {},
@@ -290,6 +290,11 @@ const spec = {
                     email: 'updated@example.com'
                 }, false),
                 responses: { 200: { description: 'Updated' } }
+            },
+            delete: {
+                tags: ['Patients'], summary: 'Delete (Soft Delete) patient',
+                parameters: [pathParam('patient_id', 'DICC-2026-0001')],
+                responses: { 200: { description: 'Deleted' } }
             }
         },
         '/api/patients/{patient_id}/photo': {
@@ -394,7 +399,8 @@ const spec = {
                 parameters: [pathParam('appointment_id', 'APT-2026-00001')],
                 requestBody: body({ appointment_date: '2026-06-16', slot_id: 'S2' }, false),
                 responses: { 200: { description: 'Updated' } }
-            }
+            },
+            delete: { tags: ['Appointments'], summary: 'Delete (Soft Delete) appointment', parameters: [pathParam('appointment_id', 'APT-2026-00001')], responses: { 200: { description: 'Deleted and slot released' } } }
         },
         '/api/appointments/{appointment_id}/cancel': {
             patch: {
@@ -468,6 +474,14 @@ const spec = {
         },
         '/api/appointments/auto-reschedule': {
             post: { tags: ['Token System'], summary: 'Move missed token to next available slot', requestBody: body({ appointment_id: 'APT-001' }), responses: { 200: { description: 'Moved' } } }
+        },
+        '/api/appointments/queue/{doctor_id}': {
+            delete: {
+                tags: ['Token System'],
+                summary: 'Clear Doctor Queue for a day',
+                parameters: [pathParam('doctor_id', 'DOC-00007'), queryParam('date', '2026-06-15', 'Date to clear (default today)')],
+                responses: { 200: { description: 'Queue cleared' } }
+            }
         },
 
         // ══ DOCTORS ═══════════════════════════════════════════════════════════

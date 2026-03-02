@@ -563,3 +563,50 @@ exports.autoReschedule = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+
+// ── DELETE /api/appointments/queue/:doctor_id ───────────────────────
+exports.clearQueue = async (req, res) => {
+    try {
+        const { doctor_id } = req.params;
+        const { date } = req.query;
+        const queryDate = toMidnight(date || new Date());
+        const actor = req.user ? req.user.username : 'ADMIN';
+
+        const result = await Appointment.updateMany(
+            {
+                doctor_id,
+                appointment_date: queryDate,
+                token_number: { $ne: null },
+                status: { $in: ['BOOKED', 'CONFIRMED'] },
+                token_status: { $in: ['WAITING', 'CHECKED_IN', 'IN_PROGRESS'] }
+            },
+            {
+                $set: {
+                    status: 'CANCELLED',
+                    token_status: 'SKIPPED',
+                    cancellation_reason: 'Queue cleared by admin',
+                    last_updated_at: new Date(),
+                    last_updated_by: actor
+                }
+            }
+        );
+
+        await DoctorAvailability.findOneAndUpdate(
+            { doctor_id, date: queryDate },
+            { $set: { current_token: 0, updated_at: new Date() } }
+        );
+
+        await audit({
+            event_type: 'QUEUE_CLEARED',
+            entity_type: 'doctor_availability',
+            entity_id: doctor_id,
+            actor,
+            actor_type: req.user ? req.user.role : 'ADMIN',
+            meta: { date: queryDate, cancelled_count: result.modifiedCount }
+        });
+
+        res.json({ success: true, message: `Queue cleared for doctor ${doctor_id}. ${result.modifiedCount} tokens cancelled.` });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};

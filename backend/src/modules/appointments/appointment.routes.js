@@ -16,7 +16,8 @@ const {
     bookByForm,
     getPending24hReminders,
     getPending2hReminders,
-    markReminderSent
+    markReminderSent,
+    deleteAppointment
 } = require('./appointment.controller');
 
 const {
@@ -27,7 +28,8 @@ const {
     getNextToken,
     updateTokenStatus,
     getTokenStatus,
-    autoReschedule
+    autoReschedule,
+    clearQueue
 } = require('./token.controller');
 
 const validate = require('../../middleware/validate');
@@ -62,6 +64,7 @@ router.post('/book-with-token', bookWithToken);
 router.get('/daily-tokens', getDailyTokens);
 router.get('/clinic-display', getClinicDisplay);
 router.post('/auto-reschedule', autoReschedule);
+router.delete('/queue/:doctor_id', clearQueue);
 
 // Token param routes (before /:appointment_id)
 router.get('/next-token/:doctor_id', getNextToken);
@@ -79,5 +82,6 @@ router.patch('/:appointment_id', validate(update), updateAppointment);
 router.patch('/:appointment_id/cancel', cancelAppointment);
 router.patch('/:appointment_id/complete', completeAppointment);
 router.patch('/:appointment_id/no-show', markNoShow);
+router.delete('/:appointment_id', deleteAppointment);
 
 module.exports = router;
