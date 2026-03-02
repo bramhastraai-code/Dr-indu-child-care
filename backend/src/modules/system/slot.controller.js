@@ -1,7 +1,7 @@
 const Slot = require('../../models/Slot');
 const SlotAvailability = require('../../models/SlotAvailability');
 const audit = require('../../utils/audit');
-const { toMidnight } = require('../../utils/helpers');
+const { toMidnight, canonicalizeDoctorName } = require('../../utils/helpers');
 
 // @route   GET /api/slots/available
 exports.getAvailableSlots = async (req, res) => {
@@ -334,22 +334,30 @@ exports.getSlotConfig = async (req, res) => {
     try {
         const slots = await Slot.find({ is_active: true }).sort({ sort_order: 1, start_time: 1 });
         const Doctor = require('../../models/Doctor');
-        const activeDoctors = await Doctor.find({ is_active: true });
+        const activeDoctors = await Doctor.find({ is_active: true }).sort({ name: 1 });
 
-        // 1. Identify all unique names assigned to slots (Doctors + Categories)
-        const allIdentityNames = new Set();
+        // 1. Identify all unique names assigned to slots (Deduplicated Doctors + Categories)
+        const identities = new Map(); // Canonical -> DisplayName
+
         activeDoctors.forEach(dr => {
-            allIdentityNames.add(dr.name);
-            allIdentityNames.add(dr.name.replace(/\./g, ''));
+            const canonical = canonicalizeDoctorName(dr.name);
+            // Use the Doctor's original name as the display key
+            identities.set(canonical, dr.name);
         });
 
         slots.forEach(s => {
             if (s.days_by_doctor) {
                 for (const key of s.days_by_doctor.keys()) {
-                    allIdentityNames.add(key);
+                    const canonical = canonicalizeDoctorName(key);
+                    if (!identities.has(canonical)) {
+                        // This is likely a category (e.g. "VACCINATION")
+                        identities.set(canonical, key);
+                    }
                 }
             }
         });
+
+        const allIdentityNames = Array.from(identities.values());
 
         // 2. Build the result for each identity
         const results = Array.from(allIdentityNames).map(name => {
