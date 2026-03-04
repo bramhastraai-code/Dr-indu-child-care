@@ -9,23 +9,8 @@ const {
 } = require('../../utils/doctorScope');
 
 const ensureDoctorCanAccessPatient = async (req, res, patientId, message = 'Access denied for this patient profile') => {
-    const doctorId = getDoctorIdFromSession(req);
-    if (!doctorId) return true;
-
-    const hasAccess = await Appointment.exists({
-        doctor_id: doctorId,
-        patient_id: patientId,
-        is_deleted: false
-    });
-
-    if (hasAccess) return true;
-
-    res.status(403).json({
-        success: false,
-        error_code: 'DOCTOR_SCOPE_FORBIDDEN',
-        message
-    });
-    return false;
+    // Doctors can now access any patient MRD. Scoping is removed for viewing.
+    return true;
 };
 
 const isRecordedBySessionDoctor = (req, entry) => {
@@ -65,23 +50,8 @@ const ensureDoctorCanAccessEntry = async (req, res, entry, message = 'You can on
 };
 
 const scopeEntriesForDoctor = async (req, entries = []) => {
-    const doctorId = getDoctorIdFromSession(req);
-    if (!doctorId) return entries;
-
-    const scoped = [];
-    for (const entry of entries) {
-        const entryDoctorId = await getEntryDoctorId(entry);
-        if (entryDoctorId && String(entryDoctorId) === String(doctorId)) {
-            scoped.push(entry);
-            continue;
-        }
-
-        if (!entryDoctorId && isRecordedBySessionDoctor(req, entry)) {
-            scoped.push(entry);
-        }
-    }
-
-    return scoped;
+    // Doctors can now see all entries in the MRD. Scoping is removed for viewing.
+    return entries;
 };
 
 // @desc    Get full MRD
@@ -91,10 +61,37 @@ exports.getMRDByPatientId = async (req, res) => {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
         if (!await ensureDoctorCanAccessPatient(req, res, req.params.patient_id, 'You can only view MRD for patients linked to your profile')) return;
 
-        const mrd = await MRD.findOne({ patient_id: req.params.patient_id }).lean();
+        const [mrd, appointments] = await Promise.all([
+            MRD.findOne({ patient_id: req.params.patient_id }).lean(),
+            Appointment.find({ patient_id: req.params.patient_id, is_deleted: false }).sort({ appointment_date: -1 }).lean()
+        ]);
+
         if (!mrd) return res.status(404).json({ success: false, message: 'MRD not found' });
 
         const scopedEntries = await scopeEntriesForDoctor(req, mrd.entries || []);
+
+        // Create a 'datewise' unified timeline
+        const groupedByDate = {};
+        const getDateKey = (date) => {
+            try { return new Date(date).toISOString().split('T')[0]; }
+            catch (e) { return 'unknown'; }
+        };
+
+        scopedEntries.forEach(e => {
+            const key = getDateKey(e.visit_date);
+            if (!groupedByDate[key]) groupedByDate[key] = { date: key, appointments: [], mrd_entries: [] };
+            groupedByDate[key].mrd_entries.push(e);
+        });
+
+        appointments.forEach(a => {
+            const key = getDateKey(a.appointment_date);
+            if (!groupedByDate[key]) groupedByDate[key] = { date: key, appointments: [], mrd_entries: [] };
+            groupedByDate[key].appointments.push(a);
+        });
+
+        const timeline = Object.keys(groupedByDate)
+            .sort((a, b) => new Date(b) - new Date(a))
+            .map(date => groupedByDate[date]);
 
         // Derive vaccination history
         const vaccination_history = scopedEntries
@@ -111,7 +108,9 @@ exports.getMRDByPatientId = async (req, res) => {
             data: {
                 ...mrd,
                 entries: scopedEntries.sort((a, b) => new Date(b.visit_date) - new Date(a.visit_date)),
-                vaccination_history
+                vaccination_history,
+                appointments,
+                timeline // Unified datewise view
             }
         });
     } catch (err) {
@@ -318,9 +317,10 @@ exports.exportMRD = async (req, res) => {
         const { patient_id } = req.params;
         if (!await ensureDoctorCanAccessPatient(req, res, patient_id, 'You can only export MRD for patients linked to your profile')) return;
 
-        const [mrd, patient] = await Promise.all([
+        const [mrd, patient, appointments] = await Promise.all([
             MRD.findOne({ patient_id }).lean(),
-            Patient.findOne({ patient_id }).lean()
+            Patient.findOne({ patient_id }).lean(),
+            Appointment.find({ patient_id, is_deleted: false }).sort({ appointment_date: -1 }).lean()
         ]);
 
         if (!mrd || !patient) return res.status(404).json({ success: false, message: 'Not found' });
@@ -345,7 +345,8 @@ exports.exportMRD = async (req, res) => {
                     age: patient.age_years ? `${patient.age_years}y ${patient.age_months}m` : null
                 },
                 mrd_entries: scopedEntries.sort((a, b) => new Date(b.visit_date) - new Date(a.visit_date)),
-                vaccination_history
+                vaccination_history,
+                appointment_history: appointments
             }
         });
     } catch (err) {
@@ -457,9 +458,7 @@ exports.uploadMRDAttachment = async (req, res) => {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
         const { id } = req.params;
-        const { url, name, file_type } = req.body || {};
-
-        if (!url) return res.status(400).json({ success: false, message: 'url is required (Base64 or Link)' });
+        const { url, name, file_type, attachments } = req.body || {};
 
         const mrd = await MRD.findOne({ 'entries._id': id });
         if (!mrd) return res.status(404).json({ success: false, message: 'Entry not found' });
@@ -469,15 +468,33 @@ exports.uploadMRDAttachment = async (req, res) => {
         if (!await ensureDoctorCanAccessEntry(req, res, entry, 'You can only upload attachments for MRD entries linked to your profile')) return;
         if (entry.is_locked) return res.status(403).json({ success: false, message: 'Entry is locked' });
 
-        entry.attachments.push({
-            url,
-            name: name || 'attachment',
-            file_type: file_type || 'image/jpeg',
-            uploaded_at: new Date()
-        });
+        // Handle multiple attachments
+        if (Array.isArray(attachments) && attachments.length > 0) {
+            attachments.forEach(att => {
+                if (att.url) {
+                    entry.attachments.push({
+                        url: att.url,
+                        name: att.name || 'attachment',
+                        file_type: att.file_type || 'image/jpeg',
+                        uploaded_at: new Date()
+                    });
+                }
+            });
+        }
+        // Handle single attachment
+        else if (url) {
+            entry.attachments.push({
+                url,
+                name: name || 'attachment',
+                file_type: file_type || 'image/jpeg',
+                uploaded_at: new Date()
+            });
+        } else {
+            return res.status(400).json({ success: false, message: 'No attachments provided. Use url or attachments array.' });
+        }
 
         await mrd.save();
-        res.json({ success: true, message: 'Attachment uploaded', data: entry.attachments });
+        res.json({ success: true, message: 'Attachments uploaded successfully', data: entry.attachments });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

@@ -22,7 +22,7 @@ router.post('/entry', authorize(['superadmin', 'admin', 'doctor']), addMRDEntry)
 router.patch('/entry/:id', authorize(['superadmin', 'admin', 'doctor']), updateMRDEntry);
 router.get('/appointment/:appointment_id', authorize(['superadmin', 'admin', 'doctor', 'staff', 'secretary']), getEntryByAppointment);
 router.patch('/entry/:id/lock', authorize(['superadmin', 'admin', 'doctor']), lockMRDEntry);
-router.post('/entry/:id/attachment', authorize(['superadmin', 'admin', 'doctor']), uploadMRDAttachment);
+router.post('/entry/:id/attachment', authorize(['superadmin', 'admin', 'doctor', 'staff', 'secretary']), uploadMRDAttachment);
 
 router.get('/:patient_id/export', authorize(['superadmin', 'admin', 'doctor', 'staff', 'secretary']), exportMRD);
 router.get('/:patient_id', authorize(['superadmin', 'admin', 'doctor', 'staff', 'secretary']), getMRDByPatientId);

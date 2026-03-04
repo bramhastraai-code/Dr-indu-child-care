@@ -2,28 +2,38 @@ const express = require('express');
 const router = express.Router();
 const Appointment = require('../../models/Appointment');
 const auth = require('../../middleware/auth');
+const { getDoctorIdFromSession } = require('../../utils/doctorScope');
 
 router.use(auth); // Must be authenticated to view or mark notifications
 
-// GET /api/notifications — public
+// GET /api/notifications — scoped by doctor if doctor session
 router.get('/', async (req, res) => {
     try {
+        const doctorId = getDoctorIdFromSession(req);
+
         const tomorrow = new Date();
         tomorrow.setDate(tomorrow.getDate() + 1);
         tomorrow.setHours(0, 0, 0, 0);
         const dayAfter = new Date(tomorrow);
         dayAfter.setDate(dayAfter.getDate() + 1);
 
-        const upcomingAppts = await Appointment.find({
+        const query = {
             appointment_date: { $gte: tomorrow, $lt: dayAfter },
-            status: { $in: ['BOOKED', 'CONFIRMED'] }
-        }).limit(50);
+            status: { $in: ['BOOKED', 'CONFIRMED'] },
+            is_deleted: false
+        };
+
+        if (doctorId) {
+            query.doctor_id = doctorId;
+        }
+
+        const upcomingAppts = await Appointment.find(query).limit(50);
 
         const notifications = upcomingAppts.map(appt => ({
             notification_id: `NOT-${appt.appointment_id}`,
             type: 'APPOINTMENT_REMINDER',
             title: 'Appointment Tomorrow',
-            message: `Appointment ${appt.appointment_id} with ${appt.doctor_name} is tomorrow at slot ${appt.slot_id}`,
+            message: `Appointment ${appt.appointment_id} with ${appt.doctor_name || 'you'} is tomorrow at slot ${appt.slot_id}`,
             related_entity_id: appt.appointment_id,
             is_read: appt.reminder_24h_sent || false,
             created_at: appt.created_at

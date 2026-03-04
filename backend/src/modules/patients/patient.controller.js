@@ -33,37 +33,13 @@ const generatePatientId = async () => {
 };
 
 const getScopedPatientIdFilter = async (req) => {
-    const doctorId = getDoctorIdFromSession(req);
-    if (!doctorId) return null;
-
-    const patientIds = await Appointment.distinct('patient_id', {
-        doctor_id: doctorId,
-        is_deleted: false
-    });
-
-    return {
-        $in: patientIds.length ? patientIds : ['__NO_MATCH__']
-    };
+    // Doctors can now see all patients. Scoping is removed for viewing.
+    return null;
 };
 
 const ensureDoctorCanAccessPatient = async (req, res, patientId, message = 'Access denied for this patient profile') => {
-    const doctorId = getDoctorIdFromSession(req);
-    if (!doctorId) return true;
-
-    const hasAccess = await Appointment.exists({
-        doctor_id: doctorId,
-        patient_id: patientId,
-        is_deleted: false
-    });
-
-    if (hasAccess) return true;
-
-    res.status(403).json({
-        success: false,
-        error_code: 'DOCTOR_SCOPE_FORBIDDEN',
-        message
-    });
-    return false;
+    // Doctors can now access any patient profile. Scoping is removed for viewing.
+    return true;
 };
 
 // @desc    Register a new patient
@@ -512,7 +488,7 @@ exports.uploadPatientPhoto = async (req, res) => {
 
         const { patient_id } = req.params;
         if (!await ensureDoctorCanAccessPatient(req, res, patient_id, 'You can only update patients linked to your profile')) return;
-        // Accept base64 string in body.photo or body.patient_photo
+
         const { photo, patient_photo } = req.body || {};
         const photoData = photo || patient_photo;
 
