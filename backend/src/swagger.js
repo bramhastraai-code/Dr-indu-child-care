@@ -424,7 +424,7 @@ const spec = {
         '/api/appointments/reminders/pending-24h': {
             get: {
                 tags: ['Appointments'],
-                summary: 'List tomorrow appointments pending 24h reminder and generate deferred tokens',
+                summary: 'Bulk generate queue tokens and list tomorrow appointments pending 24h reminder',
                 responses: { 200: { description: 'Success' } }
             }
         },
@@ -448,7 +448,7 @@ const spec = {
         // ══ TOKEN SYSTEM ══════════════════════════════════════════════════════
         '/api/appointments/book-with-token': {
             post: {
-                tags: ['Token System'], summary: 'Book appointment (token deferred to 24h reminder)',
+                tags: ['Token System'], summary: 'Book appointment with immediate token (if for today)',
                 requestBody: body({
                     patient_id: 'DICC-2026-0001',
                     doctor_id: 'DOC-00007',
@@ -457,18 +457,18 @@ const spec = {
                     visit_type: 'CONSULTATION',
                     booking_source: 'dashboard'
                 }),
-                responses: { 201: { description: 'Booked. token_number remains null until /api/appointments/reminders/pending-24h generates queue tokens' } }
+                responses: { 201: { description: 'Booked. token_number is assigned immediately if appointment_date is today.' } }
             }
         },
         '/api/appointments/daily-tokens': {
             get: {
-                tags: ['Token System'], summary: 'List tokens by doctor/date',
+                tags: ['Token System'], summary: 'List tokens by doctor/date (Auto-assigns tokens if missing)',
                 parameters: [queryParam('date', '2026-06-15'), queryParam('doctor_id', '')],
                 responses: { 200: { description: 'Success' } }
             }
         },
         '/api/appointments/clinic-display': {
-            get: { tags: ['Token System'], summary: '📺 Public Display Board Data', parameters: [queryParam('date', '2026-06-15')], responses: { 200: { description: 'Clinic board status' } } }
+            get: { tags: ['Token System'], summary: '📺 Public Display Board Data (Auto-assigns tokens if missing)', parameters: [queryParam('date', '2026-06-15')], responses: { 200: { description: 'Clinic board status' } } }
         },
         '/api/appointments/next-token/{doctor_id}': {
             get: { tags: ['Token System'], summary: 'Advance Queue (Next Patient)', parameters: [pathParam('doctor_id', 'DOC-00007')], responses: { 200: { description: 'Success' } } }
