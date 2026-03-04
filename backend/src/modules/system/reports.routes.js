@@ -4,12 +4,21 @@ const Patient = require('../../models/Patient');
 const Appointment = require('../../models/Appointment');
 const { toMidnight } = require('../../utils/helpers');
 const auth = require('../../middleware/auth');
+const authorize = require('../../middleware/rbac');
+const {
+    getDoctorIdFromSession,
+    ensureDoctorSessionHasProfile
+} = require('../../utils/doctorScope');
 
 router.use(auth); // Must be authenticated to view any report
+router.use(authorize(['superadmin', 'admin', 'staff', 'secretary', 'doctor']));
 
 // GET /api/reports/dashboard — public
 router.get('/dashboard', async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
+        const sessionDoctorId = getDoctorIdFromSession(req);
         const today = toMidnight(new Date());
         const tomorrow = new Date(today);
         tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
@@ -17,17 +26,26 @@ router.get('/dashboard', async (req, res) => {
         sevenDaysLater.setUTCDate(sevenDaysLater.getUTCDate() + 7);
         const startOfMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
 
+        const appointmentScope = sessionDoctorId ? { doctor_id: sessionDoctorId } : {};
+        const patientScope = sessionDoctorId
+            ? {
+                patient_id: {
+                    $in: await Appointment.distinct('patient_id', { doctor_id: sessionDoctorId, is_deleted: false })
+                }
+            }
+            : {};
+
         const [totalPatients, todayAppts, upcomingAppts, newThisMonth, doctorStats, statusBreakdown] = await Promise.all([
-            Patient.countDocuments({ is_deleted: false }),
-            Appointment.countDocuments({ appointment_date: today, status: { $in: ['BOOKED', 'CONFIRMED'] } }),
-            Appointment.countDocuments({ appointment_date: { $gte: tomorrow, $lte: sevenDaysLater }, status: { $in: ['BOOKED', 'CONFIRMED'] } }),
-            Patient.countDocuments({ is_deleted: false, registered_at: { $gte: startOfMonth } }),
+            Patient.countDocuments({ is_deleted: false, ...patientScope }),
+            Appointment.countDocuments({ appointment_date: today, status: { $in: ['BOOKED', 'CONFIRMED'] }, ...appointmentScope }),
+            Appointment.countDocuments({ appointment_date: { $gte: tomorrow, $lte: sevenDaysLater }, status: { $in: ['BOOKED', 'CONFIRMED'] }, ...appointmentScope }),
+            Patient.countDocuments({ is_deleted: false, registered_at: { $gte: startOfMonth }, ...patientScope }),
             Appointment.aggregate([
-                { $match: { appointment_date: { $gte: today, $lte: sevenDaysLater } } },
+                { $match: { appointment_date: { $gte: today, $lte: sevenDaysLater }, ...appointmentScope } },
                 { $group: { _id: '$doctor_name', count: { $sum: 1 } } }
             ]),
             Appointment.aggregate([
-                { $match: { appointment_date: today } },
+                { $match: { appointment_date: today, ...appointmentScope } },
                 { $group: { _id: '$status', count: { $sum: 1 } } }
             ])
         ]);
@@ -57,6 +75,9 @@ router.get('/dashboard', async (req, res) => {
 // GET /api/reports/appointments — public
 router.get('/appointments', async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
+        const sessionDoctorId = getDoctorIdFromSession(req);
         const { date_from, date_to, doctor_id, doctor_name, status, booking_source, page = 1, limit = 100 } = req.query;
 
         const filter = {};
@@ -65,8 +86,12 @@ router.get('/appointments', async (req, res) => {
             if (date_from) filter.appointment_date.$gte = toMidnight(date_from);
             if (date_to) filter.appointment_date.$lte = toMidnight(date_to);
         }
-        if (doctor_id) filter.doctor_id = doctor_id;
-        if (doctor_name) filter.doctor_name = new RegExp(doctor_name, 'i');
+        if (sessionDoctorId) {
+            filter.doctor_id = sessionDoctorId;
+        } else {
+            if (doctor_id) filter.doctor_id = doctor_id;
+            if (doctor_name) filter.doctor_name = new RegExp(doctor_name, 'i');
+        }
         if (status) filter.status = status.toUpperCase();
         if (booking_source) filter.booking_source = booking_source.toLowerCase();
 
@@ -100,12 +125,24 @@ router.get('/appointments', async (req, res) => {
 // GET /api/reports/patients — public
 router.get('/patients', async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
+        const sessionDoctorId = getDoctorIdFromSession(req);
+        const patientScope = sessionDoctorId
+            ? {
+                patient_id: {
+                    $in: await Appointment.distinct('patient_id', { doctor_id: sessionDoctorId, is_deleted: false })
+                }
+            }
+            : {};
+        const patientMatch = { is_deleted: false, ...patientScope };
+
         const [byCity, byGender, bySource, byAgeGroup, registrationTrend, total] = await Promise.all([
-            Patient.aggregate([{ $match: { is_deleted: false } }, { $group: { _id: '$city', count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
-            Patient.aggregate([{ $match: { is_deleted: false } }, { $group: { _id: '$gender', count: { $sum: 1 } } }]),
-            Patient.aggregate([{ $match: { is_deleted: false } }, { $group: { _id: '$registration_source', count: { $sum: 1 } } }]),
+            Patient.aggregate([{ $match: patientMatch }, { $group: { _id: '$city', count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
+            Patient.aggregate([{ $match: patientMatch }, { $group: { _id: '$gender', count: { $sum: 1 } } }]),
+            Patient.aggregate([{ $match: patientMatch }, { $group: { _id: '$registration_source', count: { $sum: 1 } } }]),
             Patient.aggregate([
-                { $match: { is_deleted: false, age_years: { $exists: true, $ne: null } } },
+                { $match: { ...patientMatch, age_years: { $exists: true, $ne: null } } },
                 {
                     $bucket: {
                         groupBy: '$age_years',
@@ -116,7 +153,7 @@ router.get('/patients', async (req, res) => {
                 }
             ]),
             Patient.aggregate([
-                { $match: { is_deleted: false } },
+                { $match: patientMatch },
                 {
                     $group: {
                         _id: { year: { $year: '$registered_at' }, month: { $month: '$registered_at' } },
@@ -126,7 +163,7 @@ router.get('/patients', async (req, res) => {
                 { $sort: { '_id.year': -1, '_id.month': -1 } },
                 { $limit: 12 }
             ]),
-            Patient.countDocuments({ is_deleted: false })
+            Patient.countDocuments(patientMatch)
         ]);
 
         const toObj = (arr) => arr.reduce((acc, { _id, count }) => { if (_id) acc[_id] = count; return acc; }, {});

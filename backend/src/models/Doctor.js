@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 
 const DoctorSchema = new mongoose.Schema({
     doctor_id: {
@@ -24,6 +25,28 @@ const DoctorSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    login_username: {
+        type: String,
+        unique: true,
+        sparse: true,
+        trim: true,
+        lowercase: true
+    },
+    login_email: {
+        type: String,
+        unique: true,
+        sparse: true,
+        trim: true,
+        lowercase: true
+    },
+    password_hash: {
+        type: String,
+        select: false
+    },
+    last_login_at: {
+        type: Date,
+        default: null
+    },
     is_active: {
         type: Boolean,
         default: true
@@ -45,9 +68,24 @@ const DoctorSchema = new mongoose.Schema({
     }
 });
 
-// Update updated_at on save
+// Update timestamp + hash password if it changed.
 DoctorSchema.pre('save', async function () {
     this.updated_at = Date.now();
+    if (this.isModified('password_hash') && this.password_hash) {
+        this.password_hash = await bcrypt.hash(this.password_hash, 12);
+    }
+});
+
+DoctorSchema.methods.comparePassword = async function (candidatePassword) {
+    if (!this.password_hash || !candidatePassword) return false;
+    return bcrypt.compare(candidatePassword, this.password_hash);
+};
+
+DoctorSchema.set('toJSON', {
+    transform: (_doc, ret) => {
+        delete ret.password_hash;
+        return ret;
+    }
 });
 
 module.exports = mongoose.model('Doctor', DoctorSchema);

@@ -2,16 +2,102 @@ const MRD = require('../../models/MRD');
 const Appointment = require('../../models/Appointment');
 const Patient = require('../../models/Patient');
 const audit = require('../../utils/audit');
+const {
+    getDoctorIdFromSession,
+    ensureDoctorSessionHasProfile,
+    ensureDoctorMatches
+} = require('../../utils/doctorScope');
+
+const ensureDoctorCanAccessPatient = async (req, res, patientId, message = 'Access denied for this patient profile') => {
+    const doctorId = getDoctorIdFromSession(req);
+    if (!doctorId) return true;
+
+    const hasAccess = await Appointment.exists({
+        doctor_id: doctorId,
+        patient_id: patientId,
+        is_deleted: false
+    });
+
+    if (hasAccess) return true;
+
+    res.status(403).json({
+        success: false,
+        error_code: 'DOCTOR_SCOPE_FORBIDDEN',
+        message
+    });
+    return false;
+};
+
+const isRecordedBySessionDoctor = (req, entry) => {
+    const username = String(req?.user?.username || '').trim().toLowerCase();
+    const recordedBy = String(entry?.recorded_by || '').trim().toLowerCase();
+    return Boolean(username && recordedBy && username === recordedBy);
+};
+
+const getEntryDoctorId = async (entry) => {
+    if (entry?.attending_doctor_id) return String(entry.attending_doctor_id);
+
+    if (entry?.appointment_id) {
+        const appt = await Appointment.findOne({ appointment_id: entry.appointment_id }).select('doctor_id').lean();
+        if (appt?.doctor_id) return String(appt.doctor_id);
+    }
+
+    return null;
+};
+
+const ensureDoctorCanAccessEntry = async (req, res, entry, message = 'You can only access MRD entries linked to your profile') => {
+    const doctorId = getDoctorIdFromSession(req);
+    if (!doctorId) return true;
+
+    const entryDoctorId = await getEntryDoctorId(entry);
+    if (entryDoctorId) {
+        return ensureDoctorMatches(req, res, entryDoctorId, message);
+    }
+
+    if (isRecordedBySessionDoctor(req, entry)) return true;
+
+    res.status(403).json({
+        success: false,
+        error_code: 'DOCTOR_SCOPE_FORBIDDEN',
+        message
+    });
+    return false;
+};
+
+const scopeEntriesForDoctor = async (req, entries = []) => {
+    const doctorId = getDoctorIdFromSession(req);
+    if (!doctorId) return entries;
+
+    const scoped = [];
+    for (const entry of entries) {
+        const entryDoctorId = await getEntryDoctorId(entry);
+        if (entryDoctorId && String(entryDoctorId) === String(doctorId)) {
+            scoped.push(entry);
+            continue;
+        }
+
+        if (!entryDoctorId && isRecordedBySessionDoctor(req, entry)) {
+            scoped.push(entry);
+        }
+    }
+
+    return scoped;
+};
 
 // @desc    Get full MRD
 // @route   GET /api/mrd/:patient_id
 exports.getMRDByPatientId = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!await ensureDoctorCanAccessPatient(req, res, req.params.patient_id, 'You can only view MRD for patients linked to your profile')) return;
+
         const mrd = await MRD.findOne({ patient_id: req.params.patient_id }).lean();
         if (!mrd) return res.status(404).json({ success: false, message: 'MRD not found' });
 
+        const scopedEntries = await scopeEntriesForDoctor(req, mrd.entries || []);
+
         // Derive vaccination history
-        const vaccination_history = mrd.entries
+        const vaccination_history = scopedEntries
             .filter(e => e.visit_type === 'VACCINATION')
             .map(e => ({
                 vaccine_name: e.vaccine_given,
@@ -24,7 +110,7 @@ exports.getMRDByPatientId = async (req, res) => {
             success: true,
             data: {
                 ...mrd,
-                entries: mrd.entries.sort((a, b) => new Date(b.visit_date) - new Date(a.visit_date)),
+                entries: scopedEntries.sort((a, b) => new Date(b.visit_date) - new Date(a.visit_date)),
                 vaccination_history
             }
         });
@@ -37,6 +123,8 @@ exports.getMRDByPatientId = async (req, res) => {
 // @route   POST /api/mrd/entry
 exports.addMRDEntry = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const {
             patient_id,
             appointment_id,
@@ -68,6 +156,7 @@ exports.addMRDEntry = async (req, res) => {
         }
 
         const finalRecordedBy = recorded_by || req.user?.username || 'DOCTOR';
+        const sessionDoctorId = getDoctorIdFromSession(req);
 
         // 1. Validate Appointment if provided
         let appointment = null;
@@ -76,6 +165,7 @@ exports.addMRDEntry = async (req, res) => {
             if (!appointment) {
                 return res.status(404).json({ success: false, message: 'Appointment not found' });
             }
+            if (!ensureDoctorMatches(req, res, appointment.doctor_id, 'You can only add MRD entries for your own appointments')) return;
             if (appointment.patient_id !== patient_id) {
                 return res.status(400).json({ success: false, message: 'Appointment does not belong to this patient' });
             }
@@ -88,6 +178,8 @@ exports.addMRDEntry = async (req, res) => {
             if (existingEntry) {
                 return res.status(409).json({ success: false, message: 'MRD entry already exists for this appointment' });
             }
+        } else if (!await ensureDoctorCanAccessPatient(req, res, patient_id, 'You can only add MRD entries for patients linked to your profile')) {
+            return;
         }
 
         let mrd = await MRD.findOne({ patient_id });
@@ -98,6 +190,7 @@ exports.addMRDEntry = async (req, res) => {
             visit_date: visit_date ? new Date(visit_date) : (appointment ? appointment.appointment_date : new Date()),
             visit_type: visit_type || (appointment ? appointment.visit_type : 'CONSULTATION'),
             attending_doctor: attending_doctor || (appointment ? (appointment.doctor_name || appointment.assigned_doctor_name) : null),
+            attending_doctor_id: appointment?.doctor_id || sessionDoctorId || null,
             chief_complaint,
             clinical_notes,
             diagnosis,
@@ -147,7 +240,13 @@ exports.addMRDEntry = async (req, res) => {
 // @route   GET /api/mrd/appointment/:appointment_id
 exports.getEntryByAppointment = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { appointment_id } = req.params;
+        const appointment = await Appointment.findOne({ appointment_id }).select('doctor_id');
+        if (!appointment) return res.status(404).json({ success: false, message: 'Appointment not found' });
+        if (!ensureDoctorMatches(req, res, appointment.doctor_id, 'You can only view MRD entries for your own appointments')) return;
+
         const mrd = await MRD.findOne({ 'entries.appointment_id': appointment_id });
 
         if (!mrd) {
@@ -165,12 +264,16 @@ exports.getEntryByAppointment = async (req, res) => {
 // @route   PATCH /api/mrd/entry/:id
 exports.updateMRDEntry = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { id } = req.params;
         const mrd = await MRD.findOne({ 'entries._id': id });
         if (!mrd) return res.status(404).json({ success: false, message: 'Entry not found' });
+        if (!await ensureDoctorCanAccessPatient(req, res, mrd.patient_id, 'You can only edit MRD entries for patients linked to your profile')) return;
 
         const entry = mrd.entries.id(id);
         if (entry.is_locked) return res.status(403).json({ success: false, message: 'Entry is locked' });
+        if (!await ensureDoctorCanAccessEntry(req, res, entry, 'You can only edit MRD entries linked to your profile')) return;
 
         const body = req.body || {};
         const actor = req.user ? req.user.username : (body.recorded_by || 'DOCTOR');
@@ -210,7 +313,11 @@ exports.updateMRDEntry = async (req, res) => {
 // @route   GET /api/mrd/:patient_id/export
 exports.exportMRD = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { patient_id } = req.params;
+        if (!await ensureDoctorCanAccessPatient(req, res, patient_id, 'You can only export MRD for patients linked to your profile')) return;
+
         const [mrd, patient] = await Promise.all([
             MRD.findOne({ patient_id }).lean(),
             Patient.findOne({ patient_id }).lean()
@@ -218,7 +325,9 @@ exports.exportMRD = async (req, res) => {
 
         if (!mrd || !patient) return res.status(404).json({ success: false, message: 'Not found' });
 
-        const vaccination_history = mrd.entries
+        const scopedEntries = await scopeEntriesForDoctor(req, mrd.entries || []);
+
+        const vaccination_history = scopedEntries
             .filter(e => e.visit_type === 'VACCINATION')
             .map(e => ({ vaccine: e.vaccine_given, date: e.visit_date }));
 
@@ -235,7 +344,7 @@ exports.exportMRD = async (req, res) => {
                     dob: patient.dob,
                     age: patient.age_years ? `${patient.age_years}y ${patient.age_months}m` : null
                 },
-                mrd_entries: mrd.entries.sort((a, b) => new Date(b.visit_date) - new Date(a.visit_date)),
+                mrd_entries: scopedEntries.sort((a, b) => new Date(b.visit_date) - new Date(a.visit_date)),
                 vaccination_history
             }
         });
@@ -256,6 +365,8 @@ exports.updateMRDById = async (req, res) => {
 // @route   POST /api/mrd/vaccination
 exports.addVaccinationRecord = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const {
             patient_id,
             vaccine_name,
@@ -270,6 +381,7 @@ exports.addVaccinationRecord = async (req, res) => {
         if (!patient_id || !vaccine_name) {
             return res.status(400).json({ success: false, message: 'patient_id and vaccine_name are required' });
         }
+        if (!await ensureDoctorCanAccessPatient(req, res, patient_id, 'You can only add vaccination records for patients linked to your profile')) return;
 
         let mrd = await MRD.findOne({ patient_id });
         if (!mrd) mrd = await MRD.create({ patient_id, entries: [] });
@@ -280,6 +392,7 @@ exports.addVaccinationRecord = async (req, res) => {
             vaccine_given: vaccine_name,
             vaccine_batch: batch_number || null,
             attending_doctor: administered_by || null,
+            attending_doctor_id: getDoctorIdFromSession(req) || null,
             recorded_by: req.user?.username || administered_by || 'DOCTOR',
             recorded_at: new Date(),
             // Store extra vaccination details in clinical_notes
@@ -312,11 +425,15 @@ exports.addVaccinationRecord = async (req, res) => {
 // @route   PATCH /api/mrd/entry/:id/lock
 exports.lockMRDEntry = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { id } = req.params;
         const mrd = await MRD.findOne({ 'entries._id': id });
         if (!mrd) return res.status(404).json({ success: false, message: 'Entry not found' });
+        if (!await ensureDoctorCanAccessPatient(req, res, mrd.patient_id, 'You can only lock MRD entries for patients linked to your profile')) return;
 
         const entry = mrd.entries.id(id);
+        if (!await ensureDoctorCanAccessEntry(req, res, entry, 'You can only lock MRD entries linked to your profile')) return;
         entry.is_locked = true;
         await mrd.save();
 
@@ -337,6 +454,8 @@ exports.lockMRDEntry = async (req, res) => {
 // @route   POST /api/mrd/entry/:id/attachment
 exports.uploadMRDAttachment = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { id } = req.params;
         const { url, name, file_type } = req.body || {};
 
@@ -344,8 +463,10 @@ exports.uploadMRDAttachment = async (req, res) => {
 
         const mrd = await MRD.findOne({ 'entries._id': id });
         if (!mrd) return res.status(404).json({ success: false, message: 'Entry not found' });
+        if (!await ensureDoctorCanAccessPatient(req, res, mrd.patient_id, 'You can only upload attachments for patients linked to your profile')) return;
 
         const entry = mrd.entries.id(id);
+        if (!await ensureDoctorCanAccessEntry(req, res, entry, 'You can only upload attachments for MRD entries linked to your profile')) return;
         if (entry.is_locked) return res.status(403).json({ success: false, message: 'Entry is locked' });
 
         entry.attachments.push({

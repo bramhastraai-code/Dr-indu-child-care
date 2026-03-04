@@ -20,12 +20,12 @@ router.use(auth); // Must be authenticated to access any MRD endpoint
 router.post('/vaccination', authorize(['superadmin', 'admin', 'doctor', 'staff']), addVaccinationRecord);
 router.post('/entry', authorize(['superadmin', 'admin', 'doctor']), addMRDEntry);
 router.patch('/entry/:id', authorize(['superadmin', 'admin', 'doctor']), updateMRDEntry);
-router.get('/appointment/:appointment_id', getEntryByAppointment); // All roles can view
+router.get('/appointment/:appointment_id', authorize(['superadmin', 'admin', 'doctor', 'staff', 'secretary']), getEntryByAppointment);
 router.patch('/entry/:id/lock', authorize(['superadmin', 'admin', 'doctor']), lockMRDEntry);
 router.post('/entry/:id/attachment', authorize(['superadmin', 'admin', 'doctor']), uploadMRDAttachment);
 
-router.get('/:patient_id/export', exportMRD);
-router.get('/:patient_id', getMRDByPatientId);
+router.get('/:patient_id/export', authorize(['superadmin', 'admin', 'doctor', 'staff', 'secretary']), exportMRD);
+router.get('/:patient_id', authorize(['superadmin', 'admin', 'doctor', 'staff', 'secretary']), getMRDByPatientId);
 router.put('/:mrd_id', authorize(['superadmin', 'admin', 'doctor']), updateMRDById);
 
 module.exports = router;

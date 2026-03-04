@@ -1,12 +1,53 @@
 const Slot = require('../../models/Slot');
 const SlotAvailability = require('../../models/SlotAvailability');
+const Doctor = require('../../models/Doctor');
 const audit = require('../../utils/audit');
 const { toMidnight, canonicalizeDoctorName } = require('../../utils/helpers');
+const {
+    getDoctorIdFromSession,
+    ensureDoctorSessionHasProfile,
+    ensureDoctorMatches
+} = require('../../utils/doctorScope');
+
+const resolveScopedDoctorInput = (req, doctor_id, doctor_name) => {
+    const sessionDoctorId = getDoctorIdFromSession(req);
+    if (!sessionDoctorId) return { doctor_id, doctor_name };
+    return { doctor_id: sessionDoctorId, doctor_name: null };
+};
+
+const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const resolveDoctorRecord = async ({ doctor_id, doctor_name, activeOnly = false }) => {
+    const conditions = [];
+
+    if (doctor_id) {
+        conditions.push({ doctor_id });
+    }
+
+    if (doctor_name) {
+        const canonical = canonicalizeDoctorName(doctor_name);
+        conditions.push({
+            name: { $regex: new RegExp(`^${escapeRegex(doctor_name.trim())}$`, 'i') }
+        });
+        conditions.push({
+            name: { $regex: new RegExp(`^${escapeRegex(canonical)}$`, 'i') }
+        });
+    }
+
+    if (!conditions.length) return null;
+
+    const filter = { $or: conditions };
+    if (activeOnly) filter.is_active = true;
+
+    return Doctor.findOne(filter);
+};
 
 // @route   GET /api/slots/available
 exports.getAvailableSlots = async (req, res) => {
     try {
         const { doctor_name, date, doctor_id } = req.query;
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        const { doctor_id: scopedDoctorId, doctor_name: scopedDoctorName } = resolveScopedDoctorInput(req, doctor_id, doctor_name);
 
         const queryDate = toMidnight(date);
         const dayOfWeek = queryDate.getUTCDay();
@@ -16,28 +57,16 @@ exports.getAvailableSlots = async (req, res) => {
             queryDate.getUTCDate() === now.getUTCDate();
 
         const allTemplates = await Slot.find({ is_active: true }).sort({ start_time: 1 });
-        const Doctor = require('../../models/Doctor');
 
         // Case A: Specific Doctor (by ID or Name)
-        if (doctor_id || doctor_name) {
-            let targetDoctor = null;
-            if (doctor_id) {
-                targetDoctor = await Doctor.findOne({ doctor_id });
-            }
-
-            // Fallback to name if ID not found or not provided
-            if (!targetDoctor && doctor_name) {
-                const canonical = canonicalizeDoctorName(doctor_name);
-                targetDoctor = await Doctor.findOne({
-                    $or: [
-                        { name: { $regex: new RegExp(`^${doctor_name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
-                        { name: { $regex: new RegExp(`^${canonical.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
-                    ],
-                    is_active: true
-                });
-            }
+        if (scopedDoctorId || scopedDoctorName) {
+            const targetDoctor = await resolveDoctorRecord({
+                doctor_id: scopedDoctorId,
+                doctor_name: scopedDoctorName
+            });
 
             if (!targetDoctor) return res.status(404).json({ success: false, message: 'Doctor not found or inactive' });
+            if (!ensureDoctorMatches(req, res, targetDoctor.doctor_id, 'You can only view slots for your own doctor profile')) return;
             if (!targetDoctor.is_active) return res.json({ success: true, message: 'Doctor is inactive', data: [] });
 
             const actualName = targetDoctor.name;
@@ -166,21 +195,29 @@ exports.getAvailableSlots = async (req, res) => {
 exports.getDailyStatus = async (req, res) => {
     try {
         const { doctor_name, date, doctor_id } = req.query;
-        if (!doctor_name || !date) {
-            return res.status(400).json({ success: false, message: 'doctor_name and date are required' });
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
+        const { doctor_id: scopedDoctorId, doctor_name: scopedDoctorName } = resolveScopedDoctorInput(req, doctor_id, doctor_name);
+        if (!date || (!scopedDoctorId && !scopedDoctorName)) {
+            return res.status(400).json({ success: false, message: 'doctor_id/doctor_name and date are required' });
         }
+
+        const doctor = await resolveDoctorRecord({
+            doctor_id: scopedDoctorId,
+            doctor_name: scopedDoctorName
+        });
+        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+        if (!ensureDoctorMatches(req, res, doctor.doctor_id, 'You can only view slot status for your own doctor profile')) return;
 
         const queryDate = toMidnight(date);
         const templates = await Slot.find({ is_active: true }).sort({ sort_order: 1 });
-
-        const filter = { slot_date: queryDate };
-        if (doctor_id) {
-            filter.doctor_id = doctor_id;
-        } else {
-            filter.doctor_name = doctor_name;
-        }
-
-        const availability = await SlotAvailability.find(filter);
+        const availability = await SlotAvailability.find({
+            slot_date: queryDate,
+            $or: [
+                { doctor_id: doctor.doctor_id },
+                { doctor_name: doctor.name }
+            ]
+        });
 
         const statusMap = {};
         availability.forEach(a => {
@@ -210,7 +247,7 @@ exports.getDailyStatus = async (req, res) => {
             };
         });
 
-        res.json({ success: true, date, doctor_name, doctor_id: doctor_id || null, data });
+        res.json({ success: true, date, doctor_name: doctor.name, doctor_id: doctor.doctor_id, data });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -220,8 +257,10 @@ exports.getDailyStatus = async (req, res) => {
 exports.blockSlot = async (req, res) => {
     try {
         const { slots, slot_date, doctor_name, doctor_id, reason, blocked_by } = req.body || {};
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        const { doctor_id: scopedDoctorId, doctor_name: scopedDoctorName } = resolveScopedDoctorInput(req, doctor_id, doctor_name);
 
-        if (!slots || !Array.isArray(slots) || !slot_date || (!doctor_name && !doctor_id)) {
+        if (!slots || !Array.isArray(slots) || !slot_date || (!scopedDoctorName && !scopedDoctorId)) {
             return res.status(400).json({ success: false, message: 'Missing required fields (slots, slot_date, and doctor_name/id)' });
         }
 
@@ -229,15 +268,13 @@ exports.blockSlot = async (req, res) => {
         const actor = blocked_by || (req.user ? req.user.username : 'SECRETARY');
 
         // Resolve canonical doctor
-        const Doctor = require('../../models/Doctor');
-        const doctor = await Doctor.findOne({
-            $or: [
-                { doctor_id: doctor_id || 'NONE' },
-                { name: { $regex: new RegExp(`^${doctor_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
-            ]
+        const doctor = await resolveDoctorRecord({
+            doctor_id: scopedDoctorId,
+            doctor_name: scopedDoctorName
         });
 
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+        if (!ensureDoctorMatches(req, res, doctor.doctor_id, 'You can only block slots for your own doctor profile')) return;
         if (!doctor.is_active) return res.status(400).json({ success: false, message: 'Doctor is inactive' });
 
         const finalName = doctor.name;
@@ -263,7 +300,7 @@ exports.blockSlot = async (req, res) => {
         await audit({
             event_type: 'SLOT_BLOCKED',
             entity_type: 'time_slots',
-            entity_id: `${doctor_name}_${slot_date}`,
+            entity_id: `${finalName}_${slot_date}`,
             actor,
             actor_type: req.user ? req.user.role : 'SECRETARY',
             new_value: { slots, reason }
@@ -279,8 +316,10 @@ exports.blockSlot = async (req, res) => {
 exports.unblockSlot = async (req, res) => {
     try {
         const { slots, slot_date, doctor_name, doctor_id } = req.body || {};
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        const { doctor_id: scopedDoctorId, doctor_name: scopedDoctorName } = resolveScopedDoctorInput(req, doctor_id, doctor_name);
 
-        if (!slots || !Array.isArray(slots) || !slot_date || (!doctor_name && !doctor_id)) {
+        if (!slots || !Array.isArray(slots) || !slot_date || (!scopedDoctorName && !scopedDoctorId)) {
             return res.status(400).json({ success: false, message: 'Missing required fields (slots, slot_date, and doctor_name/id)' });
         }
 
@@ -288,15 +327,13 @@ exports.unblockSlot = async (req, res) => {
         const actor = req.user ? req.user.username : 'SECRETARY';
 
         // Resolve canonical doctor
-        const Doctor = require('../../models/Doctor');
-        const doctor = await Doctor.findOne({
-            $or: [
-                { doctor_id: doctor_id || 'NONE' },
-                { name: { $regex: new RegExp(`^${doctor_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
-            ]
+        const doctor = await resolveDoctorRecord({
+            doctor_id: scopedDoctorId,
+            doctor_name: scopedDoctorName
         });
 
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+        if (!ensureDoctorMatches(req, res, doctor.doctor_id, 'You can only unblock slots for your own doctor profile')) return;
         const finalName = doctor.name;
         const finalId = doctor.doctor_id;
 
@@ -461,8 +498,10 @@ exports.updateSlotConfig = async (req, res) => {
 exports.updateDailySlot = async (req, res) => {
     try {
         const { slot_id, slot_date, doctor_name, doctor_id, custom_label, custom_start_time, custom_end_time } = req.body || {};
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        const { doctor_id: scopedDoctorId, doctor_name: scopedDoctorName } = resolveScopedDoctorInput(req, doctor_id, doctor_name);
 
-        if (!slot_id || !slot_date || (!doctor_name && !doctor_id)) {
+        if (!slot_id || !slot_date || (!scopedDoctorName && !scopedDoctorId)) {
             return res.status(400).json({ success: false, message: 'Missing required fields (slot_id, slot_date, and doctor_name/id)' });
         }
 
@@ -470,15 +509,13 @@ exports.updateDailySlot = async (req, res) => {
         const actor = req.user?.username || 'ADMIN';
 
         // Resolve canonical doctor
-        const Doctor = require('../../models/Doctor');
-        const doctor = await Doctor.findOne({
-            $or: [
-                { doctor_id: doctor_id || 'NONE' },
-                { name: { $regex: new RegExp(`^${doctor_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
-            ]
+        const doctor = await resolveDoctorRecord({
+            doctor_id: scopedDoctorId,
+            doctor_name: scopedDoctorName
         });
 
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+        if (!ensureDoctorMatches(req, res, doctor.doctor_id, 'You can only update daily slots for your own doctor profile')) return;
         if (!doctor.is_active) return res.status(400).json({ success: false, message: 'Doctor is inactive' });
 
         const finalName = doctor.name;
@@ -578,9 +615,13 @@ exports.deleteSlot = async (req, res) => {
 // @route   GET /api/slots/doctor-slots/:doctor_id
 exports.getDoctorSlots = async (req, res) => {
     try {
-        const { doctor_id } = req.params;
-        const Doctor = require('../../models/Doctor');
-        const doctor = await Doctor.findOne({ doctor_id });
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
+        const requestedDoctorId = req.params.doctor_id;
+        const effectiveDoctorId = getDoctorIdFromSession(req) || requestedDoctorId;
+        if (!ensureDoctorMatches(req, res, effectiveDoctorId, 'You can only view your own doctor slots')) return;
+
+        const doctor = await Doctor.findOne({ doctor_id: effectiveDoctorId });
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
         const safeName = doctor.name.replace(/\./g, '');
@@ -592,7 +633,7 @@ exports.getDoctorSlots = async (req, res) => {
             ]
         }).sort({ sort_order: 1, start_time: 1 });
 
-        res.json({ success: true, doctor_id, data: slots });
+        res.json({ success: true, doctor_id: doctor.doctor_id, data: slots });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

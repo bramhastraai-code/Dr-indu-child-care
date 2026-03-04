@@ -10,8 +10,12 @@ const {
     getAvailabilityDashboard
 } = require('./availability.controller');
 const auth = require('../../middleware/auth');
+const authorize = require('../../middleware/rbac');
+
+const AVAILABILITY_ROLES = ['superadmin', 'admin', 'staff', 'secretary', 'doctor'];
 
 router.use(auth);
+router.use(authorize(AVAILABILITY_ROLES));
 
 // ── Doctor Availability & Queue ─────────────────────────────────────────────
 // All public (no auth)

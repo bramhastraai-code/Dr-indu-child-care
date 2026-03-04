@@ -19,7 +19,9 @@ module.exports = (req, res, next) => {
             req.user = {
                 id: userData.id || userData._id,
                 username: userData.username,
-                role: userData.role
+                role: userData.role,
+                user_type: userData.user_type || (userData.role === 'doctor' ? 'doctor' : 'admin'),
+                doctor_id: userData.doctor_id
             };
             req.authMethod = 'jwt';
             return next();
@@ -46,19 +48,28 @@ module.exports = (req, res, next) => {
         req.user = {
             id: 'n8n_system',
             username: 'n8n_bot',
-            role: 'superadmin'
+            role: 'superadmin',
+            user_type: 'system'
         };
         req.authMethod = 'apikey';
         return next();
     }
 
-    // 3. Fallback: For development/integration, always allow access as superadmin if requested
-    // This makes all APIs public as per user request.
-    req.user = {
-        id: 'public_system',
-        username: 'public_user',
-        role: 'superadmin' // Bypass all RBAC checks by default
-    };
-    req.authMethod = 'public';
-    return next();
+    // 3. Optional fallback for local integrations
+    if (String(process.env.ALLOW_PUBLIC_API || '').toLowerCase() === 'true') {
+        req.user = {
+            id: 'public_system',
+            username: 'public_user',
+            role: 'superadmin',
+            user_type: 'system'
+        };
+        req.authMethod = 'public';
+        return next();
+    }
+
+    return res.status(401).json({
+        success: false,
+        error_code: 'UNAUTHORIZED',
+        message: 'Authentication required'
+    });
 };

@@ -9,6 +9,12 @@ const SystemConfig = require('../../models/SystemConfig');
 const audit = require('../../utils/audit');
 const { toMidnight, extractMobile, normalizeWaId, normalizePhone, canonicalizeDoctorName } = require('../../utils/helpers');
 const { hashField } = require('../../utils/encryption');
+const {
+    getDoctorIdFromSession,
+    ensureDoctorSessionHasProfile,
+    ensureDoctorMatches,
+    withDoctorFilter
+} = require('../../utils/doctorScope');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -51,6 +57,14 @@ const resolveDoctorDetails = async ({ doctor_id, doctor_name, doctor_speciality 
         }
     }
     return { finalId, finalName, finalSpeciality };
+};
+
+const resolveScopedDoctorInput = (req, doctor_id, doctor_name) => {
+    const sessionDoctorId = getDoctorIdFromSession(req);
+    if (!sessionDoctorId) {
+        return { doctor_id, doctor_name };
+    }
+    return { doctor_id: sessionDoctorId, doctor_name: null };
 };
 
 const parseTimeToMinutes = (timeStr) => {
@@ -275,15 +289,17 @@ const enrichAppointment = async (a) => {
 exports.getAppointments = async (req, res) => {
     try {
         const { date, patient_id, doctor_id, doctor_name, status, source, page = 1, limit = 50 } = req.query;
-        const filter = { is_deleted: false };
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
+        const filter = withDoctorFilter(req, { is_deleted: false });
 
         if (date) {
             const d = toMidnight(date);
             filter.appointment_date = d;
         }
         if (patient_id) filter.patient_id = patient_id;
-        if (doctor_id) filter.doctor_id = doctor_id;
-        if (doctor_name) filter.doctor_name = new RegExp(doctor_name, 'i');
+        if (!getDoctorIdFromSession(req) && doctor_id) filter.doctor_id = doctor_id;
+        if (!getDoctorIdFromSession(req) && doctor_name) filter.doctor_name = new RegExp(doctor_name, 'i');
         if (status) filter.status = status.toUpperCase();
         if (source) filter.booking_source = source.toLowerCase();
 
@@ -313,6 +329,8 @@ exports.createAppointment = async (req, res) => {
     let slotReservation = null;
     let appointmentPersisted = false;
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const {
             patient_id,
             mobile, wa_id,
@@ -338,7 +356,9 @@ exports.createAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: `booking_source must be one of: ${validSources.join(', ')}` });
         }
 
-        if (!appointment_date || !slot_id || (!doctor_name && !doctor_id)) {
+        const { doctor_id: scopedDoctorId, doctor_name: scopedDoctorName } = resolveScopedDoctorInput(req, doctor_id, doctor_name);
+
+        if (!appointment_date || !slot_id || (!scopedDoctorName && !scopedDoctorId)) {
             return res.status(400).json({ success: false, error_code: 'VALIDATION_ERROR', message: 'appointment_date, slot_id, and doctor_name or doctor_id are required.' });
         }
 
@@ -361,7 +381,11 @@ exports.createAppointment = async (req, res) => {
         }
 
         // Resolve doctor name and speciality
-        const { finalId: finalDoctorId, finalName: finalDoctorName, finalSpeciality: finalDoctorSpeciality } = await resolveDoctorDetails({ doctor_id, doctor_name, doctor_speciality });
+        const { finalId: finalDoctorId, finalName: finalDoctorName, finalSpeciality: finalDoctorSpeciality } = await resolveDoctorDetails({
+            doctor_id: scopedDoctorId,
+            doctor_name: scopedDoctorName,
+            doctor_speciality
+        });
 
         if (!finalDoctorName) {
             return res.status(400).json({ success: false, message: 'doctor_name is required.' });
@@ -535,19 +559,22 @@ exports.createAppointment = async (req, res) => {
 // Dashboard stats: totals by status and booking_source for today or a given date
 exports.getAppointmentStats = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { date } = req.query;
         const queryDate = date ? toMidnight(date) : toMidnight(new Date());
+        const baseMatch = withDoctorFilter(req, { appointment_date: queryDate });
 
         const [statusCounts, sourceCounts, total] = await Promise.all([
             Appointment.aggregate([
-                { $match: { appointment_date: queryDate } },
+                { $match: baseMatch },
                 { $group: { _id: '$status', count: { $sum: 1 } } }
             ]),
             Appointment.aggregate([
-                { $match: { appointment_date: queryDate } },
+                { $match: baseMatch },
                 { $group: { _id: '$booking_source', count: { $sum: 1 } } }
             ]),
-            Appointment.countDocuments({ appointment_date: queryDate })
+            Appointment.countDocuments(baseMatch)
         ]);
 
         const byStatus = {};
@@ -581,8 +608,11 @@ exports.getAppointmentStats = async (req, res) => {
 // ── 5. GET /api/appointments/:appointment_id ─────────────────────────────────
 exports.getAppointmentById = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const appt = await Appointment.findOne({ appointment_id: req.params.appointment_id });
         if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
+        if (!ensureDoctorMatches(req, res, appt.doctor_id, 'You can only view appointments assigned to your profile')) return;
         const enriched = await enrichAppointment(appt);
         res.json({ success: true, data: enriched });
     } catch (err) {
@@ -594,14 +624,18 @@ exports.getAppointmentById = async (req, res) => {
 // Reschedule or update appointment (date, slot, reason, doctor)
 exports.updateAppointment = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { appointment_id } = req.params;
         const { appointment_date, slot_id, doctor_name, doctor_id, doctor_speciality, visit_type, appointment_mode, reason } = req.body || {};
 
         const appt = await Appointment.findOne({ appointment_id });
         if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
+        if (!ensureDoctorMatches(req, res, appt.doctor_id, 'You can only update appointments assigned to your profile')) return;
         if (appt.status === 'CANCELLED') return res.status(409).json({ success: false, message: 'Cannot update a cancelled appointment.' });
 
         const updates = { last_updated_at: new Date(), last_updated_by: req.user?.username || 'SYSTEM' };
+        const { doctor_id: scopedDoctorId, doctor_name: scopedDoctorName } = resolveScopedDoctorInput(req, doctor_id, doctor_name);
 
         // Handle slot change (reschedule)
         if (appointment_date || slot_id || doctor_name || doctor_id) {
@@ -609,8 +643,8 @@ exports.updateAppointment = async (req, res) => {
             const newSlotId = slot_id || appt.slot_id;
             // If change requested, resolve canonical name and ID
             const { finalId: newDocId, finalName: newDocName, finalSpeciality: newDocSpeciality } = await resolveDoctorDetails({
-                doctor_id: doctor_id || appt.doctor_id,
-                doctor_name: doctor_name || appt.doctor_name,
+                doctor_id: scopedDoctorId || appt.doctor_id,
+                doctor_name: scopedDoctorName || appt.doctor_name,
                 doctor_speciality: doctor_speciality || appt.doctor_speciality
             });
             const currentDate = toMidnight(appt.appointment_date);
@@ -745,6 +779,8 @@ exports.updateAppointment = async (req, res) => {
 // Cancel by bot or dashboard — same endpoint, cancelled_by field tracks who
 exports.cancelAppointment = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { appointment_id } = req.params;
         const { cancellation_reason, cancelled_by = 'dashboard' } = req.body || {};
 
@@ -753,6 +789,7 @@ exports.cancelAppointment = async (req, res) => {
 
         const appt = await Appointment.findOne({ appointment_id });
         if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
+        if (!ensureDoctorMatches(req, res, appt.doctor_id, 'You can only cancel appointments assigned to your profile')) return;
         if (appt.status === 'CANCELLED') return res.status(409).json({ success: false, message: 'Appointment is already cancelled.' });
 
         await Appointment.updateOne({ appointment_id }, {
@@ -796,6 +833,8 @@ exports.getTodayAppointments = async (req, res) => {
 // Look up upcoming appointments by WhatsApp ID (bot-facing shortcut)
 exports.getAppointmentsByWaId = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const rawWaId = req.params.wa_id;
         const parsedDays = Number.parseInt(req.query.days, 10);
         const parsedLimit = Number.parseInt(req.query.limit, 10);
@@ -819,11 +858,13 @@ exports.getAppointmentsByWaId = async (req, res) => {
             dateFilter.$lte = upper;
         }
 
-        let appointmentsQuery = Appointment.find({
+        const query = withDoctorFilter(req, {
             patient_id: patient.patient_id,
             status: { $in: ['BOOKED', 'CONFIRMED'] },
             appointment_date: dateFilter
-        }).sort({ appointment_date: 1, slot_id: 1 });
+        });
+
+        let appointmentsQuery = Appointment.find(query).sort({ appointment_date: 1, slot_id: 1 });
         if (maxLimit) appointmentsQuery = appointmentsQuery.limit(maxLimit);
 
         const appointments = await appointmentsQuery;
@@ -851,6 +892,8 @@ exports.bookByWhatsapp = async (req, res) => {
     let slotReservation = null;
     let appointmentPersisted = false;
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const {
             wa_id: rawWaId,
             doctor_name,
@@ -863,7 +906,9 @@ exports.bookByWhatsapp = async (req, res) => {
             reason
         } = req.body || {};
 
-        if (!rawWaId || !appointment_date || !slot_id || (!doctor_name && !doctor_id)) {
+        const { doctor_id: scopedDoctorId, doctor_name: scopedDoctorName } = resolveScopedDoctorInput(req, doctor_id, doctor_name);
+
+        if (!rawWaId || !appointment_date || !slot_id || (!scopedDoctorName && !scopedDoctorId)) {
             return res.status(400).json({
                 success: false,
                 message: 'wa_id, appointment_date, slot_id, and doctor_name (or doctor_id) are required.'
@@ -923,7 +968,11 @@ exports.bookByWhatsapp = async (req, res) => {
         }
 
         // Resolve doctor name and speciality
-        const { finalId: finalDoctorId, finalName: finalDoctorName, finalSpeciality: finalDoctorSpeciality } = await resolveDoctorDetails({ doctor_id, doctor_name, doctor_speciality });
+        const { finalId: finalDoctorId, finalName: finalDoctorName, finalSpeciality: finalDoctorSpeciality } = await resolveDoctorDetails({
+            doctor_id: scopedDoctorId,
+            doctor_name: scopedDoctorName,
+            doctor_speciality
+        });
 
         if (!finalDoctorName) {
             return res.status(400).json({ success: false, message: 'doctor_name is required.' });
@@ -1060,6 +1109,8 @@ exports.bookByForm = async (req, res) => {
     let slotReservation = null;
     let appointmentPersisted = false;
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const {
             wa_id,
             mobile, // fallback
@@ -1073,8 +1124,10 @@ exports.bookByForm = async (req, res) => {
             reason
         } = req.body || {};
 
+        const { doctor_id: scopedDoctorId, doctor_name: scopedDoctorName } = resolveScopedDoctorInput(req, doctor_id, doctor_name);
+
         const raw = wa_id || mobile;
-        if (!raw || !appointment_date || !slot_id || (!doctor_name && !doctor_id)) {
+        if (!raw || !appointment_date || !slot_id || (!scopedDoctorName && !scopedDoctorId)) {
             return res.status(400).json({
                 success: false,
                 message: 'wa_id (or mobile), appointment_date, slot_id, and doctor_name (or doctor_id) are required.'
@@ -1103,7 +1156,11 @@ exports.bookByForm = async (req, res) => {
         }
 
         // Resolve doctor name and speciality
-        const { finalId: finalDoctorId, finalName: finalDoctorName, finalSpeciality: finalDoctorSpeciality } = await resolveDoctorDetails({ doctor_id, doctor_name, doctor_speciality });
+        const { finalId: finalDoctorId, finalName: finalDoctorName, finalSpeciality: finalDoctorSpeciality } = await resolveDoctorDetails({
+            doctor_id: scopedDoctorId,
+            doctor_name: scopedDoctorName,
+            doctor_speciality
+        });
 
         if (!finalDoctorName) {
             return res.status(400).json({ success: false, message: 'doctor_name is required.' });
@@ -1237,17 +1294,21 @@ exports.bookByForm = async (req, res) => {
 // Fetch appointments for tomorrow that haven't had a 24h reminder sent.
 exports.getPending24hReminders = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const tomorrow = new Date();
         tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
         const queryDate = toMidnight(tomorrow);
         const tokenGeneration = await assignTokensForDate(queryDate);
 
-        const appointments = await Appointment.find({
+        const reminderFilter = withDoctorFilter(req, {
             appointment_date: queryDate,
             status: { $in: ['BOOKED', 'CONFIRMED'] },
             reminder_24h_sent: false,
             is_deleted: false
-        }).sort({ slot_id: 1 });
+        });
+
+        const appointments = await Appointment.find(reminderFilter).sort({ slot_id: 1 });
 
         const enriched = await Promise.all(appointments.map(enrichAppointment));
         res.json({
@@ -1266,6 +1327,8 @@ exports.getPending24hReminders = async (req, res) => {
 // Mark a specific reminder type as sent
 exports.markReminderSent = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { appointment_id } = req.params;
         const { type } = req.body || {}; // '24h' or '2h'
 
@@ -1275,6 +1338,7 @@ exports.markReminderSent = async (req, res) => {
 
         let appointment = await Appointment.findOne({ appointment_id });
         if (!appointment) return res.status(404).json({ success: false, message: 'Appointment not found' });
+        if (!ensureDoctorMatches(req, res, appointment.doctor_id, 'You can only update reminders for your own appointments')) return;
 
         // Validation: Check if the appointment date matches the reminder type
         const now = new Date();
@@ -1322,11 +1386,14 @@ exports.markReminderSent = async (req, res) => {
 // ── PATCH /api/appointments/:appointment_id/complete ─────────────────────────
 exports.completeAppointment = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { appointment_id } = req.params;
         const { notes, next_followup_date } = req.body || {};
 
         const appt = await Appointment.findOne({ appointment_id });
         if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
+        if (!ensureDoctorMatches(req, res, appt.doctor_id, 'You can only complete appointments assigned to your profile')) return;
         if (appt.status === 'CANCELLED') return res.status(409).json({ success: false, message: 'Cannot complete a cancelled appointment.' });
 
         await Appointment.updateOne({ appointment_id }, {
@@ -1355,10 +1422,13 @@ exports.completeAppointment = async (req, res) => {
 // ── PATCH /api/appointments/:appointment_id/no-show ──────────────────────────
 exports.markNoShow = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { appointment_id } = req.params;
 
         const appt = await Appointment.findOne({ appointment_id });
         if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
+        if (!ensureDoctorMatches(req, res, appt.doctor_id, 'You can only mark no-show for appointments assigned to your profile')) return;
         if (appt.status === 'CANCELLED') return res.status(409).json({ success: false, message: 'Cannot mark a cancelled appointment as no-show.' });
 
         await Appointment.updateOne({ appointment_id }, {
@@ -1384,18 +1454,22 @@ exports.markNoShow = async (req, res) => {
 // ── DELETE /api/appointments/:appointment_id ──────────────────────────────────
 exports.deleteAppointment = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { appointment_id } = req.params;
         const actor = req.user ? req.user.username : 'ADMIN';
+
+        const existing = await Appointment.findOne({ appointment_id, is_deleted: false });
+        if (!existing) {
+            return res.status(404).json({ success: false, message: 'Appointment not found' });
+        }
+        if (!ensureDoctorMatches(req, res, existing.doctor_id, 'You can only delete appointments assigned to your profile')) return;
 
         const appt = await Appointment.findOneAndUpdate(
             { appointment_id, is_deleted: false },
             { $set: { is_deleted: true, deleted_at: new Date(), deleted_by: actor } },
             { new: true }
         );
-
-        if (!appt) {
-            return res.status(404).json({ success: false, message: 'Appointment not found' });
-        }
 
         // Release the slot if it was booked
         if (appt.slot_id && appt.appointment_date) {
@@ -1422,15 +1496,19 @@ exports.deleteAppointment = async (req, res) => {
 // ── GET /api/appointments/reminders/pending-2h ────────────────────────────────
 exports.getPending2hReminders = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const now = new Date();
         const twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000);
         const today = toMidnight(now);
 
-        const appointments = await Appointment.find({
+        const reminderFilter = withDoctorFilter(req, {
             appointment_date: today,
             status: { $in: ['BOOKED', 'CONFIRMED'] },
             reminder_2h_sent: { $ne: true }
-        }).sort({ slot_id: 1 });
+        });
+
+        const appointments = await Appointment.find(reminderFilter).sort({ slot_id: 1 });
 
         // Filter to only those whose slot time is within the next 2 hours
         const Slot = require('../../models/Slot');

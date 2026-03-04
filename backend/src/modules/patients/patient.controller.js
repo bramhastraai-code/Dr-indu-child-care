@@ -5,6 +5,10 @@ const Appointment = require('../../models/Appointment');
 const audit = require('../../utils/audit');
 const { normalizePhone, normalizeWaId } = require('../../utils/helpers');
 const { hashField, decrypt } = require('../../utils/encryption');
+const {
+    getDoctorIdFromSession,
+    ensureDoctorSessionHasProfile
+} = require('../../utils/doctorScope');
 
 // Helper: parse DD/MM/YYYY or YYYY-MM-DD → Date
 const parseDOB = (raw) => {
@@ -26,6 +30,40 @@ const generatePatientId = async () => {
         ? parseInt(last.patient_id.replace(prefix, ''), 10) + 1
         : 1;
     return `${prefix}${seq.toString().padStart(4, '0')}`;
+};
+
+const getScopedPatientIdFilter = async (req) => {
+    const doctorId = getDoctorIdFromSession(req);
+    if (!doctorId) return null;
+
+    const patientIds = await Appointment.distinct('patient_id', {
+        doctor_id: doctorId,
+        is_deleted: false
+    });
+
+    return {
+        $in: patientIds.length ? patientIds : ['__NO_MATCH__']
+    };
+};
+
+const ensureDoctorCanAccessPatient = async (req, res, patientId, message = 'Access denied for this patient profile') => {
+    const doctorId = getDoctorIdFromSession(req);
+    if (!doctorId) return true;
+
+    const hasAccess = await Appointment.exists({
+        doctor_id: doctorId,
+        patient_id: patientId,
+        is_deleted: false
+    });
+
+    if (hasAccess) return true;
+
+    res.status(403).json({
+        success: false,
+        error_code: 'DOCTOR_SCOPE_FORBIDDEN',
+        message
+    });
+    return false;
 };
 
 // @desc    Register a new patient
@@ -261,6 +299,8 @@ exports.registerFromForm = async (req, res) => {
 // @desc    Lookup patient by wa_id
 exports.getPatientByWaId = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const raw = req.params.mobile || req.params.wa_id;
         const normalized = normalizeWaId(raw);
         const wa_hash = hashField(normalizePhone(raw));
@@ -278,6 +318,7 @@ exports.getPatientByWaId = async (req, res) => {
                 wa_id: normalized
             });
         }
+        if (!await ensureDoctorCanAccessPatient(req, res, patient.patient_id, 'You can only access patients linked to your profile')) return;
 
         const stats = await Appointment.aggregate([
             { $match: { patient_id: patient.patient_id } },
@@ -300,11 +341,14 @@ exports.getPatientByWaId = async (req, res) => {
 // @desc    Get patient by patient_id
 exports.getPatientById = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const patient = await Patient.findOne({ patient_id: req.params.patient_id, is_deleted: false });
 
         if (!patient) {
             return res.status(404).json({ success: false, error_code: 'PATIENT_NOT_FOUND', message: 'Patient not found' });
         }
+        if (!await ensureDoctorCanAccessPatient(req, res, patient.patient_id, 'You can only access patients linked to your profile')) return;
 
         const [total_appointments, last_appt] = await Promise.all([
             Appointment.countDocuments({ patient_id: patient.patient_id }),
@@ -329,12 +373,16 @@ exports.getPatientById = async (req, res) => {
 // @desc    Get all patients
 exports.getPatients = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         let { page = 1, limit = 20, search, source, status, gender, city, doctor } = req.query;
         page = parseInt(page, 10);
         limit = parseInt(limit, 10);
         const skip = (page - 1) * limit;
 
         const query = { is_deleted: false };
+        const scopedPatientIdFilter = await getScopedPatientIdFilter(req);
+        if (scopedPatientIdFilter) query.patient_id = scopedPatientIdFilter;
 
         if (gender) query.gender = gender;
         if (city) query.city = new RegExp(city, 'i');
@@ -381,9 +429,12 @@ exports.getPatients = async (req, res) => {
 // @desc    Update patient details
 exports.updatePatient = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { patient_id } = req.params;
         const updates = req.body || {};
         const actor = req.user ? req.user.username : 'ADMIN';
+        if (!await ensureDoctorCanAccessPatient(req, res, patient_id, 'You can only update patients linked to your profile')) return;
 
         // Protect immutable fields
         delete updates.patient_id;
@@ -423,8 +474,11 @@ exports.updatePatient = async (req, res) => {
 // @route   DELETE /api/patients/:patient_id
 exports.deletePatient = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { patient_id } = req.params;
         const actor = req.user ? req.user.username : 'ADMIN';
+        if (!await ensureDoctorCanAccessPatient(req, res, patient_id, 'You can only delete patients linked to your profile')) return;
 
         const patient = await Patient.findOneAndUpdate(
             { patient_id, is_deleted: false },
@@ -454,7 +508,10 @@ exports.deletePatient = async (req, res) => {
 // @route   PATCH /api/patients/:patient_id/photo
 exports.uploadPatientPhoto = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { patient_id } = req.params;
+        if (!await ensureDoctorCanAccessPatient(req, res, patient_id, 'You can only update patients linked to your profile')) return;
         // Accept base64 string in body.photo or body.patient_photo
         const { photo, patient_photo } = req.body || {};
         const photoData = photo || patient_photo;
@@ -483,9 +540,13 @@ exports.uploadPatientPhoto = async (req, res) => {
 // @route   GET /api/patients/export/csv
 exports.exportPatientsCsv = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { date_from, date_to, city, gender, doctor } = req.query;
 
         const filter = { is_deleted: false };
+        const scopedPatientIdFilter = await getScopedPatientIdFilter(req);
+        if (scopedPatientIdFilter) filter.patient_id = scopedPatientIdFilter;
         if (city) filter.city = new RegExp(city, 'i');
         if (gender) filter.gender = gender;
         if (doctor) filter.doctor = new RegExp(doctor, 'i');
@@ -521,21 +582,28 @@ exports.exportPatientsCsv = async (req, res) => {
 // @route   GET /api/patients/stats
 exports.getPatientStats = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const startOfWeek = new Date(now);
         startOfWeek.setDate(now.getDate() - now.getDay());
 
+        const scopedPatientIdFilter = await getScopedPatientIdFilter(req);
+        const baseMatch = scopedPatientIdFilter
+            ? { is_deleted: false, patient_id: scopedPatientIdFilter }
+            : { is_deleted: false };
+
         const [total, active, inactive, byGender, byCity, byDoctor, bySources, newMonth, newWeek] = await Promise.all([
-            Patient.countDocuments({ is_deleted: false }),
-            Patient.countDocuments({ is_deleted: false, is_active: true }),
-            Patient.countDocuments({ is_deleted: false, is_active: false }),
-            Patient.aggregate([{ $match: { is_deleted: false } }, { $group: { _id: '$gender', count: { $sum: 1 } } }]),
-            Patient.aggregate([{ $match: { is_deleted: false } }, { $group: { _id: '$city', count: { $sum: 1 } } }]),
-            Patient.aggregate([{ $match: { is_deleted: false } }, { $group: { _id: '$doctor', count: { $sum: 1 } } }]),
-            Patient.aggregate([{ $match: { is_deleted: false } }, { $group: { _id: '$registration_source', count: { $sum: 1 } } }]),
-            Patient.countDocuments({ is_deleted: false, registered_at: { $gte: startOfMonth } }),
-            Patient.countDocuments({ is_deleted: false, registered_at: { $gte: startOfWeek } }),
+            Patient.countDocuments(baseMatch),
+            Patient.countDocuments({ ...baseMatch, is_active: true }),
+            Patient.countDocuments({ ...baseMatch, is_active: false }),
+            Patient.aggregate([{ $match: baseMatch }, { $group: { _id: '$gender', count: { $sum: 1 } } }]),
+            Patient.aggregate([{ $match: baseMatch }, { $group: { _id: '$city', count: { $sum: 1 } } }]),
+            Patient.aggregate([{ $match: baseMatch }, { $group: { _id: '$doctor', count: { $sum: 1 } } }]),
+            Patient.aggregate([{ $match: baseMatch }, { $group: { _id: '$registration_source', count: { $sum: 1 } } }]),
+            Patient.countDocuments({ ...baseMatch, registered_at: { $gte: startOfMonth } }),
+            Patient.countDocuments({ ...baseMatch, registered_at: { $gte: startOfWeek } }),
         ]);
 
         const toObj = (arr) => arr.reduce((acc, { _id, count }) => { if (_id) acc[_id] = count; return acc; }, {});

@@ -7,6 +7,11 @@ const audit = require('../../utils/audit');
 const { toMidnight, normalizeWaId, normalizePhone, canonicalizeDoctorName, getNextToken: getNextTokenNumber } = require('../../utils/helpers');
 const { hashField } = require('../../utils/encryption');
 const { generateAppointmentId } = require('./appointment.controller');
+const {
+    getDoctorIdFromSession,
+    ensureDoctorSessionHasProfile,
+    ensureDoctorMatches
+} = require('../../utils/doctorScope');
 
 // Helper: resolve doctor by ID or canonical name
 const resolveDoctor = async (doctor_id, doctor_name) => {
@@ -25,6 +30,12 @@ const resolveDoctor = async (doctor_id, doctor_name) => {
     return null;
 };
 
+const resolveScopedDoctorInput = (req, doctor_id, doctor_name) => {
+    const sessionDoctorId = getDoctorIdFromSession(req);
+    if (!sessionDoctorId) return { doctor_id, doctor_name };
+    return { doctor_id: sessionDoctorId, doctor_name: null };
+};
+
 // Helper: generate next token number for a doctor on a given date (exported)
 const getNextTokenNumberForDoctor = (doctor_id, date) => getNextTokenNumber(Appointment, doctor_id, date);
 exports.getNextTokenNumberForDoctor = getNextTokenNumberForDoctor;
@@ -36,6 +47,8 @@ exports.bookWithToken = async (req, res) => {
     let slotReservation = null;
     let appointmentPersisted = false;
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const {
             patient_id, wa_id, mobile,
             doctor_id, doctor_name,
@@ -44,7 +57,9 @@ exports.bookWithToken = async (req, res) => {
             booking_source = 'dashboard'
         } = req.body || {};
 
-        if (!appointment_date || !slot_id || (!doctor_id && !doctor_name)) {
+        const { doctor_id: scopedDoctorId, doctor_name: scopedDoctorName } = resolveScopedDoctorInput(req, doctor_id, doctor_name);
+
+        if (!appointment_date || !slot_id || (!scopedDoctorId && !scopedDoctorName)) {
             return res.status(400).json({ success: false, message: 'appointment_date, slot_id, and doctor_id/doctor_name are required' });
         }
 
@@ -60,7 +75,7 @@ exports.bookWithToken = async (req, res) => {
         if (!patient) return res.status(404).json({ success: false, message: 'Patient not found' });
 
         // Resolve doctor
-        const doctor = await resolveDoctor(doctor_id, doctor_name);
+        const doctor = await resolveDoctor(scopedDoctorId, scopedDoctorName);
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
         const queryDate = toMidnight(appointment_date);
@@ -189,15 +204,20 @@ exports.bookWithToken = async (req, res) => {
 // ── POST /api/appointments/token/:token/check-in ────────────────────
 exports.checkIn = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { token } = req.params;
         const { doctor_id, date } = req.body || {};
         const queryDate = toMidnight(date || new Date());
+        const sessionDoctorId = getDoctorIdFromSession(req);
+        const effectiveDoctorId = sessionDoctorId || doctor_id;
 
-        if (!doctor_id) {
+        if (!effectiveDoctorId) {
             return res.status(400).json({ success: false, message: 'doctor_id is required' });
         }
+        if (!ensureDoctorMatches(req, res, effectiveDoctorId, 'You can only check-in tokens for your own queue')) return;
 
-        const filter = { token_number: parseInt(token), appointment_date: queryDate, doctor_id };
+        const filter = { token_number: parseInt(token), appointment_date: queryDate, doctor_id: effectiveDoctorId };
 
         const appt = await Appointment.findOneAndUpdate(
             filter,
@@ -216,12 +236,17 @@ exports.checkIn = async (req, res) => {
 // ── GET /api/appointments/daily-tokens ──────────────────────────────
 exports.getDailyTokens = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { doctor_id, doctor_name, date } = req.query;
         const queryDate = toMidnight(date || new Date());
+        const sessionDoctorId = getDoctorIdFromSession(req);
 
         const filter = { appointment_date: queryDate, token_number: { $ne: null }, is_deleted: false };
 
-        if (doctor_id || doctor_name) {
+        if (sessionDoctorId) {
+            filter.doctor_id = sessionDoctorId;
+        } else if (doctor_id || doctor_name) {
             const dr = await resolveDoctor(doctor_id, doctor_name);
             if (dr) filter.doctor_id = dr.doctor_id;
             else if (doctor_name) filter.doctor_name = new RegExp(doctor_name, 'i');
@@ -327,6 +352,8 @@ exports.getClinicDisplay = async (req, res) => {
 exports.getNextToken = async (req, res) => {
     try {
         const { doctor_id } = req.params;
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, doctor_id, 'You can only advance your own queue')) return;
         const queryDate = toMidnight(new Date());
 
         // Complete current in-progress
@@ -382,6 +409,8 @@ exports.getNextToken = async (req, res) => {
 // ── PATCH /api/appointments/token/:token/status ──────────────────────
 exports.updateTokenStatus = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { token } = req.params;
         const { status, doctor_id, date } = req.body || {};
 
@@ -392,12 +421,15 @@ exports.updateTokenStatus = async (req, res) => {
         }
 
         const queryDate = toMidnight(date || new Date());
+        const sessionDoctorId = getDoctorIdFromSession(req);
+        const effectiveDoctorId = sessionDoctorId || doctor_id;
 
-        if (!doctor_id) {
+        if (!effectiveDoctorId) {
             return res.status(400).json({ success: false, message: 'doctor_id is required' });
         }
+        if (!ensureDoctorMatches(req, res, effectiveDoctorId, 'You can only update tokens for your own queue')) return;
 
-        const filter = { token_number: parseInt(token), appointment_date: queryDate, doctor_id };
+        const filter = { token_number: parseInt(token), appointment_date: queryDate, doctor_id: effectiveDoctorId };
 
         const updateFields = { token_status: status, last_updated_at: new Date() };
         if (status === 'IN_PROGRESS') updateFields.called_at = new Date();
@@ -486,12 +518,15 @@ exports.getTokenStatus = async (req, res) => {
 // Auto-reschedule NO_SHOW or same-day cancelled appointments to next available slot
 exports.autoReschedule = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { appointment_id, target_date, reason } = req.body || {};
 
         if (!appointment_id) return res.status(400).json({ success: false, message: 'appointment_id is required' });
 
         const appt = await Appointment.findOne({ appointment_id });
         if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
+        if (!ensureDoctorMatches(req, res, appt.doctor_id, 'You can only reschedule your own appointments')) return;
 
         if (!['NO_SHOW', 'CANCELLED'].includes(appt.status)) {
             return res.status(400).json({ success: false, message: 'Only NO_SHOW or CANCELLED appointments can be auto-rescheduled' });
@@ -579,6 +614,8 @@ exports.autoReschedule = async (req, res) => {
 exports.clearQueue = async (req, res) => {
     try {
         const { doctor_id } = req.params;
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, doctor_id, 'You can only clear your own queue')) return;
         const { date } = req.query;
         const queryDate = toMidnight(date || new Date());
         const actor = req.user ? req.user.username : 'ADMIN';

@@ -1,4 +1,5 @@
 const Admin = require('../../models/Admin');
+const Doctor = require('../../models/Doctor');
 const Token = require('../../models/Token');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -18,11 +19,53 @@ const getRefreshTokenExpiry = () => {
     return new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
 };
 
+const normalizeIdentifier = (identifier) => String(identifier || '').trim();
+
+const buildTokenPayload = (user, userType = 'admin') => {
+    if (userType === 'doctor') {
+        return {
+            id: user._id,
+            username: user.login_username || user.login_email || user.doctor_id,
+            role: 'doctor',
+            user_type: 'doctor',
+            doctor_id: user.doctor_id
+        };
+    }
+
+    return {
+        id: user._id,
+        username: user.username,
+        role: user.role,
+        user_type: 'admin'
+    };
+};
+
+const buildUserResponse = (user, userType = 'admin') => {
+    if (userType === 'doctor') {
+        return {
+            id: user._id,
+            doctor_id: user.doctor_id,
+            username: user.login_username || user.login_email || user.doctor_id,
+            role: 'doctor',
+            full_name: user.name,
+            permissions: []
+        };
+    }
+
+    return {
+        id: user._id,
+        username: user.username,
+        role: user.role,
+        full_name: user.full_name,
+        permissions: user.permissions || []
+    };
+};
+
 /**
  * Generate Access Token
  */
-const generateAccessToken = (user) => {
-    const payload = { id: user._id, username: user.username, role: user.role };
+const generateAccessToken = (user, userType = 'admin') => {
+    const payload = buildTokenPayload(user, userType);
     if (ACCESS_TOKEN_EXPIRES_IN.toLowerCase() === 'never') {
         return jwt.sign(payload, process.env.JWT_SECRET);
     }
@@ -32,12 +75,13 @@ const generateAccessToken = (user) => {
 /**
  * Generate Refresh Token
  */
-const generateRefreshToken = async (user, ipAddress) => {
+const generateRefreshToken = async (user, ipAddress, userType = 'admin') => {
     const token = crypto.randomBytes(40).toString('hex');
     const expiresAt = getRefreshTokenExpiry();
 
     const refreshToken = new Token({
-        user_id: user._id,
+        user_id: String(user._id),
+        user_type: userType,
         token: token,
         expires_at: expiresAt,
         created_by_ip: ipAddress
@@ -50,9 +94,9 @@ const generateRefreshToken = async (user, ipAddress) => {
 /**
  * Send tokens in response and cookie
  */
-const sendTokenResponse = async (user, ipAddress, res) => {
-    const accessToken = generateAccessToken(user);
-    const refreshToken = await generateRefreshToken(user, ipAddress);
+const sendTokenResponse = async (user, ipAddress, res, userType = 'admin') => {
+    const accessToken = generateAccessToken(user, userType);
+    const refreshToken = await generateRefreshToken(user, ipAddress, userType);
 
     const cookieOptions = {
         httpOnly: true,
@@ -66,47 +110,73 @@ const sendTokenResponse = async (user, ipAddress, res) => {
     res.json({
         success: true,
         access_token: accessToken,
-        user: {
-            id: user._id,
-            username: user.username,
-            role: user.role,
-            full_name: user.full_name,
-            permissions: user.permissions || []
-        }
+        user: buildUserResponse(user, userType)
     });
 };
 
+const findAdminByLogin = async (identifier) => {
+    return Admin.findOne({
+        $or: [{ username: identifier }, { email: identifier }],
+        is_active: true
+    });
+};
+
+const findDoctorByLogin = async (identifier) => {
+    const normalized = identifier.toLowerCase();
+    return Doctor.findOne({
+        $or: [{ login_username: normalized }, { login_email: normalized }],
+        is_active: true
+    }).select('+password_hash');
+};
+
 /**
- * @desc    Login admin
- * @route   POST /api/admin/login
+ * @desc    Login user (admin or doctor)
+ * @route   POST /api/auth/login
  */
 exports.login = async (req, res) => {
     try {
         const { username, password } = req.body || {};
+        const identifier = normalizeIdentifier(username);
         const ipAddress = req.ip;
 
-        if (!username || !password) {
+        if (!identifier || !password) {
             return res.status(400).json({ success: false, error_code: 'VALIDATION_ERROR', message: 'Username and password are required' });
         }
 
-        const admin = await Admin.findOne({ $or: [{ username }, { email: username }], is_active: true });
+        const admin = await findAdminByLogin(identifier);
+        if (admin && (await admin.comparePassword(password))) {
+            await Admin.updateOne({ _id: admin._id }, { $set: { last_login_at: new Date() } });
 
-        if (!admin || !(await admin.comparePassword(password))) {
+            await audit({
+                event_type: 'LOGIN_SUCCESS',
+                entity_type: 'admin_user',
+                entity_id: String(admin._id),
+                actor: admin.username,
+                actor_type: admin.role,
+                ip: ipAddress
+            });
+
+            await sendTokenResponse(admin, ipAddress, res, 'admin');
+            return;
+        }
+
+        const doctor = await findDoctorByLogin(identifier);
+        if (!doctor || !(await doctor.comparePassword(password))) {
             return res.status(401).json({ success: false, error_code: 'INVALID_CREDENTIALS', message: 'Invalid username or password' });
         }
 
-        await Admin.updateOne({ _id: admin._id }, { $set: { last_login_at: new Date() } });
+        await Doctor.updateOne({ _id: doctor._id }, { $set: { last_login_at: new Date() } });
 
         await audit({
-            event_type: 'LOGIN_SUCCESS',
-            entity_type: 'admin_user',
-            entity_id: String(admin._id),
-            actor: admin.username,
-            actor_type: admin.role,
+            event_type: 'DOCTOR_LOGIN_SUCCESS',
+            entity_type: 'doctor',
+            entity_id: String(doctor.doctor_id),
+            actor: doctor.login_username || doctor.login_email || doctor.doctor_id,
+            actor_type: 'doctor',
             ip: ipAddress
         });
 
-        await sendTokenResponse(admin, ipAddress, res);
+        await sendTokenResponse(doctor, ipAddress, res, 'doctor');
     } catch (err) {
         res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
     }
@@ -131,8 +201,12 @@ exports.refreshToken = async (req, res) => {
             return res.status(401).json({ success: false, error_code: 'INVALID_REFRESH_TOKEN', message: 'Refresh token is invalid or expired' });
         }
 
-        const admin = await Admin.findById(refreshToken.user_id);
-        if (!admin || !admin.is_active) {
+        const userType = refreshToken.user_type || 'admin';
+        const user = userType === 'doctor'
+            ? await Doctor.findById(refreshToken.user_id).select('+password_hash')
+            : await Admin.findById(refreshToken.user_id);
+
+        if (!user || !user.is_active) {
             return res.status(401).json({ success: false, error_code: 'USER_NOT_FOUND', message: 'User associated with token no longer exists or is inactive' });
         }
 
@@ -144,14 +218,15 @@ exports.refreshToken = async (req, res) => {
         await refreshToken.save();
 
         const newRefreshToken = new Token({
-            user_id: admin._id,
+            user_id: String(user._id),
+            user_type: userType,
             token: newToken,
             expires_at: getRefreshTokenExpiry(),
             created_by_ip: ipAddress
         });
         await newRefreshToken.save();
 
-        const accessToken = generateAccessToken(admin);
+        const accessToken = generateAccessToken(user, userType);
 
         const cookieOptions = {
             httpOnly: true,
@@ -187,15 +262,37 @@ exports.logout = async (req, res) => {
 };
 
 /**
- * @desc    Change admin password
+ * @desc    Change current user password
  * @route   POST /api/auth/change-password
  */
 exports.changePassword = async (req, res) => {
     try {
         const { old_password, new_password } = req.body || {};
+        const userType = req.user?.user_type || (req.user?.role === 'doctor' ? 'doctor' : 'admin');
 
         if (!old_password || !new_password) {
             return res.status(400).json({ success: false, error_code: 'VALIDATION_ERROR', message: 'old_password and new_password are required' });
+        }
+
+        if (new_password.length < 6) {
+            return res.status(400).json({ success: false, error_code: 'VALIDATION_ERROR', message: 'new_password must be at least 6 characters' });
+        }
+
+        if (userType === 'doctor') {
+            const doctor = await Doctor.findById(req.user.id).select('+password_hash');
+            if (!doctor || !doctor.is_active) {
+                return res.status(404).json({ success: false, error_code: 'NOT_FOUND', message: 'User not found' });
+            }
+
+            const isMatch = await doctor.comparePassword(old_password);
+            if (!isMatch) {
+                return res.status(400).json({ success: false, error_code: 'INVALID_CREDENTIALS', message: 'Old password is incorrect' });
+            }
+
+            doctor.password_hash = new_password;
+            await doctor.save();
+
+            return res.json({ success: true, message: 'Password updated successfully' });
         }
 
         const admin = await Admin.findById(req.user.id);

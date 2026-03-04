@@ -4,6 +4,11 @@ const SlotAvailability = require('../../models/SlotAvailability');
 const Appointment = require('../../models/Appointment');
 const MRD = require('../../models/MRD');
 const audit = require('../../utils/audit');
+const {
+    getDoctorIdFromSession,
+    ensureDoctorSessionHasProfile,
+    ensureDoctorMatches
+} = require('../../utils/doctorScope');
 
 const generateDoctorId = async () => {
     try {
@@ -118,8 +123,13 @@ const connectDoctorToSlots = async (doctorName, days) => {
 // GET /api/doctors
 exports.getDoctors = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const { all } = req.query;
-        const query = all === 'true' ? {} : { is_active: true };
+        const sessionDoctorId = getDoctorIdFromSession(req);
+        const query = sessionDoctorId
+            ? { doctor_id: sessionDoctorId, ...(all === 'true' ? {} : { is_active: true }) }
+            : (all === 'true' ? {} : { is_active: true });
 
         const doctors = await Doctor.find(query)
             .select('name doctor_id speciality -_id')
@@ -138,6 +148,9 @@ exports.getDoctors = async (req, res) => {
 // GET /api/doctors/:doctor_id
 exports.getDoctorById = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, req.params.doctor_id, 'You can only view your own doctor profile')) return;
+
         const doctor = await Doctor.findOne({ doctor_id: req.params.doctor_id });
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
         res.json({ success: true, data: doctor });
@@ -149,9 +162,16 @@ exports.getDoctorById = async (req, res) => {
 // POST /api/doctors
 exports.createDoctor = async (req, res, next) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (getDoctorIdFromSession(req)) {
+            return res.status(403).json({ success: false, message: 'Doctor profile cannot create additional doctor accounts' });
+        }
+
         const doctor_id = await generateDoctorId();
+        const { password, ...doctorPayload } = req.body || {};
         const doctor = await Doctor.create({
-            ...req.body,
+            ...doctorPayload,
+            ...(password ? { password_hash: password } : {}),
             doctor_id
         });
 
@@ -160,18 +180,24 @@ exports.createDoctor = async (req, res, next) => {
             await connectDoctorToSlots(doctor.name, req.body.working_days);
         }
 
+        const auditDoctor = doctor.toObject();
+        delete auditDoctor.password_hash;
+
         await audit({
             event_type: 'DOCTOR_CREATED',
             entity_type: 'doctor',
             entity_id: doctor_id,
             actor: req.user?.username || 'ADMIN',
             actor_type: 'ADMIN',
-            new_value: doctor
+            new_value: auditDoctor
         });
 
         res.status(201).json({ success: true, data: doctor });
     } catch (err) {
         console.error('[ERROR] createDoctor:', err.message);
+        if (err.code === 11000) {
+            return res.status(400).json({ success: false, message: 'Doctor login username/email already exists' });
+        }
         res.status(500).json({ success: false, error: err.message });
     }
 };
@@ -179,19 +205,34 @@ exports.createDoctor = async (req, res, next) => {
 // PATCH /api/doctors/:doctor_id
 exports.updateDoctor = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, req.params.doctor_id, 'You can only update your own doctor profile')) return;
+
         const oldDoctor = await Doctor.findOne({ doctor_id: req.params.doctor_id });
         if (!oldDoctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
         const oldName = oldDoctor.name;
-        const newName = req.body.name;
+        const updatePayload = { ...(req.body || {}) };
+        const newName = updatePayload.name;
         const wasActive = oldDoctor.is_active;
-        const nowActive = req.body.is_active;
+        const hasPasswordUpdate = Object.prototype.hasOwnProperty.call(updatePayload, 'password');
+        if (hasPasswordUpdate) {
+            if (!updatePayload.password) {
+                return res.status(400).json({ success: false, message: 'password cannot be empty' });
+            }
 
-        const doctor = await Doctor.findOneAndUpdate(
-            { doctor_id: req.params.doctor_id },
-            { $set: req.body },
-            { new: true }
-        );
+            const nextLoginUsername = updatePayload.login_username !== undefined ? updatePayload.login_username : oldDoctor.login_username;
+            const nextLoginEmail = updatePayload.login_email !== undefined ? updatePayload.login_email : oldDoctor.login_email;
+            if (!nextLoginUsername && !nextLoginEmail) {
+                return res.status(400).json({ success: false, message: 'Set login_username or login_email before setting password' });
+            }
+
+            updatePayload.password_hash = updatePayload.password;
+            delete updatePayload.password;
+        }
+
+        Object.assign(oldDoctor, updatePayload);
+        const doctor = await oldDoctor.save();
 
         // If name changed, propagate to all related records
         if (newName && newName !== oldName) {
@@ -199,12 +240,12 @@ exports.updateDoctor = async (req, res) => {
         }
 
         // If reactivated, ensure they are in the slots sheet
-        if (!wasActive && nowActive) {
+        if (!wasActive && doctor.is_active) {
             await connectDoctorToSlots(doctor.name);
         }
 
         // If deactivated, remove from slot templates to keep UI clean
-        if (wasActive && nowActive === false) {
+        if (wasActive && doctor.is_active === false) {
             const safeOld = oldName.replace(/\./g, '');
             const slots = await Slot.find({
                 $or: [
@@ -219,17 +260,26 @@ exports.updateDoctor = async (req, res) => {
             }
         }
 
+        const auditValue = { ...updatePayload };
+        if (Object.prototype.hasOwnProperty.call(auditValue, 'password_hash')) {
+            delete auditValue.password_hash;
+            auditValue.password_changed = true;
+        }
+
         await audit({
             event_type: 'DOCTOR_UPDATED',
             entity_type: 'doctor',
             entity_id: req.params.doctor_id,
             actor: req.user?.username || 'ADMIN',
             actor_type: 'ADMIN',
-            new_value: req.body
+            new_value: auditValue
         });
 
         res.json({ success: true, data: doctor });
     } catch (err) {
+        if (err.code === 11000) {
+            return res.status(400).json({ success: false, message: 'Doctor login username/email already exists' });
+        }
         res.status(500).json({ success: false, error: err.message });
     }
 };
@@ -237,6 +287,9 @@ exports.updateDoctor = async (req, res) => {
 // DELETE /api/doctors/:doctor_id
 exports.deleteDoctor = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, req.params.doctor_id, 'You can only delete your own doctor profile')) return;
+
         const doctor = await Doctor.findOne({ doctor_id: req.params.doctor_id });
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
@@ -275,6 +328,9 @@ exports.deleteDoctor = async (req, res) => {
 // GET /api/doctors/:doctor_id/schedule
 exports.getDoctorSchedule = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, req.params.doctor_id, 'You can only view your own schedule')) return;
+
         const doctor = await Doctor.findOne({ doctor_id: req.params.doctor_id });
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
@@ -317,6 +373,9 @@ exports.getDoctorSchedule = async (req, res) => {
 // PATCH /api/doctors/:doctor_id/schedule
 exports.updateDoctorSchedule = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, req.params.doctor_id, 'You can only update your own schedule')) return;
+
         const { availability } = req.body || {};
         if (!availability) {
             return res.status(400).json({ success: false, message: 'availability is required' });

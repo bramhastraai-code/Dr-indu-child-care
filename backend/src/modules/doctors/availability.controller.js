@@ -4,6 +4,11 @@ const Appointment = require('../../models/Appointment');
 const audit = require('../../utils/audit');
 const { toMidnight } = require('../../utils/helpers');
 const { handleDoctorLate, handleDoctorArrived } = require('../../services/doctorLateWorkflow');
+const {
+    getDoctorIdFromSession,
+    ensureDoctorSessionHasProfile,
+    ensureDoctorMatches
+} = require('../../utils/doctorScope');
 
 // Helper: get or create today's availability record for a doctor
 const getOrCreateAvailability = async (doctor_id, date) => {
@@ -27,20 +32,26 @@ const getOrCreateAvailability = async (doctor_id, date) => {
 // ── POST /api/doctor/availability/update ────────────────────────────
 exports.updateAvailability = async (req, res) => {
     try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+
         const {
             doctor_id, date, status,
             eta_minutes, eta_time, notes,
             check_in_time, check_out_time
         } = req.body || {};
 
-        if (!doctor_id) return res.status(400).json({ success: false, message: 'doctor_id is required' });
+        const sessionDoctorId = getDoctorIdFromSession(req);
+        const effectiveDoctorId = sessionDoctorId || doctor_id;
+
+        if (!effectiveDoctorId) return res.status(400).json({ success: false, message: 'doctor_id is required' });
+        if (!ensureDoctorMatches(req, res, effectiveDoctorId, 'You can only update your own availability')) return;
 
         const queryDate = toMidnight(date || new Date());
-        const doctor = await Doctor.findOne({ doctor_id });
+        const doctor = await Doctor.findOne({ doctor_id: effectiveDoctorId });
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
         // Capture previous status for workflow decisions
-        const prevRecord = await DoctorAvailability.findOne({ doctor_id, date: queryDate });
+        const prevRecord = await DoctorAvailability.findOne({ doctor_id: effectiveDoctorId, date: queryDate });
         const prevStatus = prevRecord?.status;
 
         const updateFields = {
@@ -70,7 +81,7 @@ exports.updateAvailability = async (req, res) => {
         }
 
         const avail = await DoctorAvailability.findOneAndUpdate(
-            { doctor_id, date: queryDate },
+            { doctor_id: effectiveDoctorId, date: queryDate },
             {
                 $set: updateFields,
                 $setOnInsert: { doctor_name: doctor.name },
@@ -82,7 +93,7 @@ exports.updateAvailability = async (req, res) => {
         await audit({
             event_type: 'DOCTOR_AVAILABILITY_UPDATED',
             entity_type: 'doctor_availability',
-            entity_id: doctor_id,
+            entity_id: effectiveDoctorId,
             actor: req.user?.username || 'SECRETARY',
             actor_type: 'SECRETARY',
             new_value: updateFields
@@ -95,7 +106,7 @@ exports.updateAvailability = async (req, res) => {
         if (status === 'LATE' && eta_minutes) {
             try {
                 workflowResult = await handleDoctorLate(
-                    doctor_id, doctor.name,
+                    effectiveDoctorId, doctor.name,
                     parseInt(eta_minutes), eta_time
                 );
             } catch (wErr) {
@@ -106,7 +117,7 @@ exports.updateAvailability = async (req, res) => {
         // PRESENT after LATE → queue "Doctor Arrived" messages
         if (status === 'PRESENT' && prevStatus === 'LATE') {
             try {
-                workflowResult = await handleDoctorArrived(doctor_id, doctor.name);
+                workflowResult = await handleDoctorArrived(effectiveDoctorId, doctor.name);
             } catch (wErr) {
                 console.error('[Workflow] handleDoctorArrived error:', wErr.message);
             }
@@ -126,6 +137,8 @@ exports.updateAvailability = async (req, res) => {
 exports.getAvailability = async (req, res) => {
     try {
         const { doctor_id } = req.params;
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, doctor_id, 'You can only view your own availability')) return;
         const { date } = req.query;
         const queryDate = toMidnight(date || new Date());
 
@@ -156,6 +169,8 @@ exports.getAvailability = async (req, res) => {
 exports.updateStatus = async (req, res) => {
     try {
         const { doctor_id } = req.params;
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, doctor_id, 'You can only update your own status')) return;
         const { status, notes } = req.body || {};
 
         if (!status) return res.status(400).json({ success: false, message: 'status is required' });
@@ -191,6 +206,8 @@ exports.updateStatus = async (req, res) => {
 exports.updateEta = async (req, res) => {
     try {
         const { doctor_id } = req.params;
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, doctor_id, 'You can only update ETA for your own profile')) return;
         const { eta_minutes, eta_time, reason } = req.body || {};
 
         const queryDate = toMidnight(new Date());
@@ -231,15 +248,18 @@ exports.updateEta = async (req, res) => {
 exports.recordLateCheckin = async (req, res) => {
     try {
         const { doctor_id, eta_minutes, eta_time, reason, date } = req.body || {};
+        const effectiveDoctorId = getDoctorIdFromSession(req) || doctor_id;
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, effectiveDoctorId, 'You can only record late check-in for your own profile')) return;
 
-        if (!doctor_id) return res.status(400).json({ success: false, message: 'doctor_id is required' });
+        if (!effectiveDoctorId) return res.status(400).json({ success: false, message: 'doctor_id is required' });
 
         const queryDate = toMidnight(date || new Date());
-        const doctor = await Doctor.findOne({ doctor_id });
+        const doctor = await Doctor.findOne({ doctor_id: effectiveDoctorId });
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
         const avail = await DoctorAvailability.findOneAndUpdate(
-            { doctor_id, date: queryDate },
+            { doctor_id: effectiveDoctorId, date: queryDate },
             {
                 $set: {
                     status: 'LATE',
@@ -265,7 +285,7 @@ exports.recordLateCheckin = async (req, res) => {
         await audit({
             event_type: 'DOCTOR_LATE_CHECKIN',
             entity_type: 'doctor_availability',
-            entity_id: doctor_id,
+            entity_id: effectiveDoctorId,
             actor: req.user?.username || 'SECRETARY',
             actor_type: 'SECRETARY',
             new_value: { eta_minutes, eta_time, reason }
@@ -281,6 +301,8 @@ exports.recordLateCheckin = async (req, res) => {
 exports.getLateCheckins = async (req, res) => {
     try {
         const { doctor_id } = req.params;
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, doctor_id, 'You can only view your own late check-ins')) return;
         const { date, days = 7 } = req.query;
 
         const endDate = toMidnight(date || new Date());
@@ -308,6 +330,8 @@ exports.getLateCheckins = async (req, res) => {
 exports.getAvailabilityDashboard = async (req, res) => {
     try {
         const { doctor_id } = req.params;
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        if (!ensureDoctorMatches(req, res, doctor_id, 'You can only view your own availability dashboard')) return;
         const { date } = req.query;
         const queryDate = toMidnight(date || new Date());
 
