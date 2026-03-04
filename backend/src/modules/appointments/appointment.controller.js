@@ -145,6 +145,13 @@ const assignTokensForDate = async (targetDate) => {
             .lean();
         const slotMap = new Map(slots.map(s => [s.slot_id, s]));
 
+        // 2.5 Load Doctors to map names to IDs if missing
+        const doctors = await Doctor.find({ is_active: true }).select('doctor_id name').lean();
+        const docByNameMap = new Map();
+        doctors.forEach(d => {
+            docByNameMap.set(canonicalizeDoctorName(d.name), d.doctor_id);
+        });
+
         // 3. Group by doctor consistently using ID or canonicalized name
         const groupedByDoctor = new Map();
         for (const appt of allAppointments) {
@@ -191,17 +198,24 @@ const assignTokensForDate = async (targetDate) => {
             for (const appt of pendingTokenAppointments) {
                 maxToken += 1;
                 generated += 1;
+
+                const updateFields = {
+                    token_number: maxToken,
+                    token_status: 'WAITING',
+                    last_updated_at: now,
+                    last_updated_by: 'SYSTEM_24H_TOKEN'
+                };
+
+                // Backfill doctor_id if missing
+                if (!appt.doctor_id && appt.doctor_name) {
+                    const resolvedId = docByNameMap.get(canonicalizeDoctorName(appt.doctor_name));
+                    if (resolvedId) updateFields.doctor_id = resolvedId;
+                }
+
                 bulkOps.push({
                     updateOne: {
                         filter: { _id: appt._id },
-                        update: {
-                            $set: {
-                                token_number: maxToken,
-                                token_status: 'WAITING',
-                                last_updated_at: now,
-                                last_updated_by: 'SYSTEM_24H_TOKEN'
-                            }
-                        }
+                        update: { $set: updateFields }
                     }
                 });
             }
@@ -259,6 +273,7 @@ const assignTokensForDate = async (targetDate) => {
         }
     }
 };
+exports.assignTokensForDate = assignTokensForDate;
 
 const enrichAppointment = async (a) => {
     const [patient, slot, availability, mrdEntry] = await Promise.all([
@@ -499,6 +514,9 @@ exports.createAppointment = async (req, res) => {
             last_updated_by: req.user?.username || booking_source.toUpperCase()
         });
         appointmentPersisted = true;
+
+        // Ensure all appointments for this date have tokens assigned (including the new one)
+        await assignTokensForDate(queryDate);
 
         // 6. Audit
         await audit({

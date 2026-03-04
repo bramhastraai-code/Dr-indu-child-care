@@ -6,7 +6,7 @@ const Doctor = require('../../models/Doctor');
 const audit = require('../../utils/audit');
 const { toMidnight, normalizeWaId, normalizePhone, canonicalizeDoctorName, getNextToken: getNextTokenNumber } = require('../../utils/helpers');
 const { hashField } = require('../../utils/encryption');
-const { generateAppointmentId } = require('./appointment.controller');
+const { generateAppointmentId, assignTokensForDate } = require('./appointment.controller');
 const {
     getDoctorIdFromSession,
     ensureDoctorSessionHasProfile,
@@ -155,6 +155,9 @@ exports.bookWithToken = async (req, res) => {
         });
         appointmentPersisted = true;
 
+        // Ensure tokens are assigned
+        await assignTokensForDate(queryDate);
+
         await audit({
             event_type: 'APPOINTMENT_BOOKED_WITH_TOKEN',
             entity_type: 'appointment',
@@ -240,6 +243,9 @@ exports.getDailyTokens = async (req, res) => {
 
         const { doctor_id, doctor_name, date } = req.query;
         const queryDate = toMidnight(date || new Date());
+
+        // Ensure all appointments for this date have tokens assigned
+        await assignTokensForDate(queryDate);
         const sessionDoctorId = getDoctorIdFromSession(req);
 
         const filter = { appointment_date: queryDate, token_number: { $ne: null }, is_deleted: false };
@@ -292,6 +298,9 @@ exports.getClinicDisplay = async (req, res) => {
     try {
         const { date } = req.query;
         const queryDate = toMidnight(date || new Date());
+
+        // Ensure all appointments for this date have tokens assigned
+        await assignTokensForDate(queryDate);
 
         // Get all active doctors' availability
         const availabilities = await DoctorAvailability.find({ date: queryDate }).lean();
