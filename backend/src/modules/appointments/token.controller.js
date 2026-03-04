@@ -271,8 +271,10 @@ exports.getDailyTokens = async (req, res) => {
         patients.forEach(p => { patientMap[p.patient_id] = p.child_name || p.full_name; });
 
         const enriched = appointments.map(a => ({
+            _id: a._id,
             patient_id: a.patient_id,
             child_name: patientMap[a.patient_id] || null,
+            token: a.token_number,
             token_number: a.token_number,
             status: a.token_status,
             slot_id: a.slot_id,
