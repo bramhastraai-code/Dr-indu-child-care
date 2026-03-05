@@ -36,7 +36,9 @@ const buildTokenPayload = (user, userType = 'admin') => {
         id: user._id,
         username: user.username,
         role: user.role,
-        user_type: 'admin'
+        permissions: user.permissions || [],
+        user_type: 'admin',
+        doctor_id: user.doctor_id || null
     };
 };
 
@@ -57,6 +59,7 @@ const buildUserResponse = (user, userType = 'admin') => {
         username: user.username,
         role: user.role,
         full_name: user.full_name,
+        doctor_id: user.doctor_id || null,
         permissions: user.permissions || []
     };
 };

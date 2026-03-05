@@ -41,6 +41,11 @@ const AdminSchema = new mongoose.Schema({
         type: [String],
         default: []
     },
+    doctor_id: {
+        type: String,
+        default: null,
+        index: true
+    },
     created_at: {
         type: Date,
         default: Date.now

@@ -140,7 +140,8 @@ exports.createAdmin = async (req, res) => {
             password_hash: password, // Pre-save hook will hash it
             full_name,
             role: normalizedRole,
-            permissions: permissions || []
+            permissions: permissions || [],
+            doctor_id: req.body.doctor_id || null
         });
 
         await admin.save();
@@ -174,7 +175,7 @@ exports.createAdmin = async (req, res) => {
 // @access  Private (SUPER_ADMIN)
 exports.updateAdmin = async (req, res) => {
     try {
-        const { full_name, role, is_active, email, permissions, password } = req.body || {};
+        const { full_name, role, is_active, email, permissions, password, doctor_id } = req.body || {};
         const { user_id } = req.params;
 
         if (!mongoose.Types.ObjectId.isValid(user_id)) {
@@ -199,6 +200,7 @@ exports.updateAdmin = async (req, res) => {
         }
         if (is_active !== undefined) admin.is_active = is_active;
         if (permissions !== undefined) admin.permissions = permissions;
+        if (doctor_id !== undefined) admin.doctor_id = doctor_id;
         if (password !== undefined && password !== '') {
             admin.password_hash = password; // pre-save hook will hash it
         }

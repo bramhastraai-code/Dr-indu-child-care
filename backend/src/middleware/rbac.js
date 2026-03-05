@@ -1,9 +1,10 @@
 /**
- * Role-Based Access Control (RBAC) middleware
+ * Role-Based and Permission-Based Access Control (RBAC) middleware
  * @param {string|string[]} roles - Allowed roles for this route
+ * @param {string} [requiredPermission] - Optional specific permission required
  */
-const authorize = (roles = []) => {
-    if (typeof roles === 'string') {
+const authorize = (roles = [], requiredPermission = null) => {
+    if (typeof roles === 'string' && roles !== '') {
         roles = [roles];
     }
 
@@ -16,20 +17,31 @@ const authorize = (roles = []) => {
             });
         }
 
-        // superadmin bypasses all role checks
+        // 1. Superadmin bypasses all checks (Total Control)
         if (req.user.role === 'superadmin') {
             return next();
         }
 
-        if (roles.length && !roles.includes(req.user.role)) {
-            return res.status(403).json({
-                success: false,
-                error_code: 'FORBIDDEN',
-                message: 'Access denied: insufficient permissions'
-            });
+        // 2. Check Permissions (Granular Control assigned by Superadmin)
+        if (requiredPermission && req.user.permissions && req.user.permissions.includes(requiredPermission)) {
+            return next();
         }
 
-        next();
+        // 3. Check Roles (Standard Control)
+        if (Array.isArray(roles) && roles.length > 0) {
+            if (roles.includes(req.user.role)) {
+                return next();
+            }
+        } else if (!requiredPermission) {
+            // If no roles and no permissions are specified, allow access (rarely used)
+            return next();
+        }
+
+        return res.status(403).json({
+            success: false,
+            error_code: 'FORBIDDEN',
+            message: 'Access denied: insufficient permissions or incorrect role'
+        });
     };
 };
 
