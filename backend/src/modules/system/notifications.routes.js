@@ -4,10 +4,8 @@ const Appointment = require('../../models/Appointment');
 const auth = require('../../middleware/auth');
 const { getDoctorIdFromSession } = require('../../utils/doctorScope');
 
-router.use(auth); // Must be authenticated to view or mark notifications
-
-// GET /api/notifications — scoped by doctor if doctor session
-router.get('/', async (req, res) => {
+// GET /api/notifications — public (auth middleware allows public by default)
+router.get('/', auth, async (req, res) => {
     try {
         const doctorId = getDoctorIdFromSession(req);
 
@@ -45,7 +43,7 @@ router.get('/', async (req, res) => {
     }
 });
 
-// PATCH /api/notifications/:notification_id/mark-read — public
+// PATCH /api/notifications/:notification_id/mark-read
 router.patch('/:notification_id/mark-read', async (req, res) => {
     try {
         const { notification_id } = req.params;

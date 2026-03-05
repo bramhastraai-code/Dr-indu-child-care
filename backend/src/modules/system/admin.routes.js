@@ -8,9 +8,9 @@ const authorize = require('../../middleware/rbac');
 // ── Public Auth Routes ──────────────────────────────────────────────
 router.post('/login', login);
 router.post('/refresh-token', refreshToken);
-router.post('/logout', logout); // Logout can be public as it clears own cookie
+router.post('/logout', logout);
 
-// ── Administrative Routes (Protected) ───────────────────────────────
+// ── All Admin Routes (auth middleware allows public by default) ──────
 router.get('/profile', auth, authorize(['superadmin', 'admin', 'staff', 'secretary', 'doctor']), getProfile);
 router.patch('/profile', auth, authorize(['superadmin', 'admin', 'staff', 'secretary', 'doctor']), updateProfile);
 

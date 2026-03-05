@@ -10,11 +10,10 @@ const {
     ensureDoctorSessionHasProfile
 } = require('../../utils/doctorScope');
 
-router.use(auth); // Must be authenticated to view any report
-router.use(authorize(['superadmin', 'admin', 'staff', 'secretary', 'doctor']));
+const REPORT_ROLES = ['superadmin', 'admin', 'staff', 'secretary', 'doctor'];
 
-// GET /api/reports/dashboard — public
-router.get('/dashboard', async (req, res) => {
+// GET /api/reports/dashboard — public (auth allows public by default)
+router.get('/dashboard', auth, authorize(REPORT_ROLES), async (req, res) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -73,7 +72,7 @@ router.get('/dashboard', async (req, res) => {
 });
 
 // GET /api/reports/appointments — public
-router.get('/appointments', async (req, res) => {
+router.get('/appointments', auth, authorize(REPORT_ROLES), async (req, res) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -123,7 +122,7 @@ router.get('/appointments', async (req, res) => {
 });
 
 // GET /api/reports/patients — public
-router.get('/patients', async (req, res) => {
+router.get('/patients', auth, authorize(REPORT_ROLES), async (req, res) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 

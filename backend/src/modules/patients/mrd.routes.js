@@ -14,7 +14,7 @@ const {
 const auth = require('../../middleware/auth');
 const authorize = require('../../middleware/rbac');
 
-router.use(auth); // Must be authenticated to access any MRD endpoint
+// All MRD endpoints — auth allows public access by default
 
 // All MRD endpoints — Protected (Restricted access)
 router.post('/vaccination', authorize(['superadmin', 'admin', 'doctor', 'staff']), addVaccinationRecord);
