@@ -11,7 +11,12 @@ module.exports = (req, res, next) => {
         ? authHeader.substring(7)
         : req.header('x-auth-token');
 
-    // 1. Try JWT Authentication first
+    // 1. Bypass authentication for public bot integration endpoints
+    if (req.originalUrl?.includes('/api/bot/') && !req.originalUrl?.includes('/analytics/')) {
+        return next();
+    }
+
+    // 2. Try JWT Authentication first
     if (token) {
         try {
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
