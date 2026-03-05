@@ -30,7 +30,7 @@ module.exports = (req, res, next) => {
         } catch (err) {
             // Token is expired/invalid. 
             // If Public API is NOT allowed, we reject here.
-            if (String(process.env.ALLOW_PUBLIC_API || '').toLowerCase() !== 'true') {
+            if (String(process.env.ALLOW_PUBLIC_API || '').trim().toLowerCase() !== 'true') {
                 let error_code = 'INVALID_TOKEN';
                 let message = 'Access token is invalid';
                 if (err.name === 'TokenExpiredError') {
@@ -58,7 +58,7 @@ module.exports = (req, res, next) => {
     }
 
     // 3. Optional fallback for public access
-    if (String(process.env.ALLOW_PUBLIC_API || '').toLowerCase() === 'true') {
+    if (String(process.env.ALLOW_PUBLIC_API || '').trim().toLowerCase() === 'true') {
         req.user = {
             id: 'public_system',
             username: 'public_user',

@@ -35,8 +35,6 @@ router.get('/slots/available-dates', getAvailableDatesBot);
 router.get('/appointments/by-wa/:wa_id', getAppointmentsByWaBot);
 router.get('/appointments/token-status/:token', getTokenStatusBot);
 
-router.use(auth);
-
 // ── Public (bot integration) ────────────────────────────────────────
 router.get('/session/:wa_id', getSession);
 router.post('/session/create', createSession);
@@ -61,6 +59,8 @@ router.post('/message/log', logMessage);
 router.get('/interactions/unregistered', getUnregisteredInteractions);
 router.get('/escalations', getEscalations);
 router.patch('/escalations/:escalation_id/resolve', resolveEscalation);
+
+router.use(auth);
 
 // ── Analytics (Public) ───────────────────────────────────────────
 router.get('/analytics/daily', async (req, res) => {

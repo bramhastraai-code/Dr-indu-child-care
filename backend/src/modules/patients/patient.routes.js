@@ -24,8 +24,8 @@ const PATIENT_DELETE_ROLES = ['superadmin', 'admin'];
 
 // ── Public / Bot routes (No Dashboard Auth Required) ─────────────────
 router.post('/form', validate(register), registerFromForm);
-router.post('/whatsapp', auth, authorize(PATIENT_ROLES), validate(register), registerFromWhatsapp);
-router.get('/by-wa/:wa_id', auth, authorize(PATIENT_ROLES), getPatientByWaId);
+router.post('/whatsapp', validate(register), registerFromWhatsapp);
+router.get('/by-wa/:wa_id', getPatientByWaId);
 
 // ── Static routes (must come BEFORE /:patient_id) ───────────────────
 router.get('/export/csv', auth, authorize(PATIENT_ROLES), exportPatientsCsv);

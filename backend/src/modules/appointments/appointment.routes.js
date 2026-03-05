@@ -42,8 +42,8 @@ const ADMIN_ONLY = ['superadmin', 'admin'];
 
 // ── Public / Bot routes (No Dashboard Auth Required) ─────────────────
 router.post('/form', validate(bookForm), bookByForm);
-router.post('/whatsapp', auth, authorize(APPOINTMENT_ROLES), validate(bookWhatsapp), bookByWhatsapp);
-router.get('/by-wa/:wa_id', auth, authorize(APPOINTMENT_ROLES), getAppointmentsByWaId);
+router.post('/whatsapp', validate(bookWhatsapp), bookByWhatsapp);
+router.get('/by-wa/:wa_id', getAppointmentsByWaId);
 
 // ── Static routes (must come BEFORE /:appointment_id) ─────────────────
 // Reminder endpoints
