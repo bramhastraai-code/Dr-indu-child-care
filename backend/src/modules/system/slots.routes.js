@@ -17,7 +17,7 @@ const authorize = require('../../middleware/rbac');
 
 const SLOT_READ_ROLES = ['superadmin', 'admin', 'staff', 'secretary', 'doctor'];
 const SLOT_MANAGE_ROLES = ['superadmin', 'admin', 'staff', 'secretary', 'doctor'];
-const SLOT_CONFIG_ROLES = ['superadmin', 'admin'];
+const SLOT_CONFIG_ROLES = ['superadmin', 'admin', 'doctor'];
 
 router.use(auth);
 

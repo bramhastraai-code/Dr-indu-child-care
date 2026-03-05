@@ -11,11 +11,11 @@ router.post('/refresh-token', refreshToken);
 router.post('/logout', logout); // Logout can be public as it clears own cookie
 
 // ── Administrative Routes (Protected) ───────────────────────────────
-router.get('/profile', auth, authorize(['superadmin', 'admin', 'staff', 'secretary']), getProfile);
-router.patch('/profile', auth, authorize(['superadmin', 'admin', 'staff', 'secretary']), updateProfile);
+router.get('/profile', auth, authorize(['superadmin', 'admin', 'staff', 'secretary', 'doctor']), getProfile);
+router.patch('/profile', auth, authorize(['superadmin', 'admin', 'staff', 'secretary', 'doctor']), updateProfile);
 
-router.get('/overview', auth, authorize(['superadmin', 'admin']), getSystemOverview);
-router.get('/roles', auth, authorize(['superadmin', 'admin']), getAvailableRoles);
+router.get('/overview', auth, authorize(['superadmin', 'admin', 'doctor']), getSystemOverview);
+router.get('/roles', auth, authorize(['superadmin', 'admin', 'doctor']), getAvailableRoles);
 router.get('/users', auth, authorize(['superadmin', 'admin']), getAdmins);
 router.post('/users', auth, authorize(['superadmin']), createAdmin);
 router.patch('/users/:user_id', auth, authorize(['superadmin']), updateAdmin);
