@@ -33,13 +33,7 @@ const AppointmentSchema = new mongoose.Schema({
         type: String,
         default: null
     },
-    // Legacy/internal alias retained for backward compatibility
-    assigned_doctor_name: {
-        type: String,
-        default: null
-    },
-    // Deprecated: use visit_category instead
-    visit_type: {
+    doctor_speciality: {
         type: String,
         default: null
     },
