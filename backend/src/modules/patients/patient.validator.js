@@ -1,73 +1,56 @@
 const Joi = require('joi');
 
-// ── Reusable fragments ────────────────────────────────────────
 const optionalStr = () => Joi.string().trim().allow('', null);
 const optionalEmail = () => Joi.string().email().lowercase().trim().allow('', null);
 const optionalInt = () => Joi.number().integer().min(0).allow(null);
 
-// ── Personal block (shared between register & update) ─────────
-const personalFields = {
-    salutation: Joi.string().valid('Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Master', 'Miss').insensitive().allow('', null),
-    first_name: optionalStr().max(100),
+const genderField = Joi.string()
+    .trim()
+    .valid('boy', 'girl', 'male', 'female', 'm', 'f')
+    .insensitive()
+    .allow('', null)
+    .messages({
+        'any.only': 'Gender must be one of boy or girl'
+    });
+
+const basePatientFields = {
+    salutation: Joi.string().valid('Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Master', 'Miss', 'Baby', 'Baby of').insensitive().allow('', null),
+    first_name: optionalStr().regex(/^[a-zA-Z\s]+$/).max(50).messages({
+        'string.pattern.base': 'First name must contain only letters'
+    }),
     middle_name: optionalStr().max(100),
-    last_name: optionalStr().max(100),
-    gender: Joi.string().valid('Male', 'Female', 'Other').insensitive().allow(null),
+    last_name: optionalStr().regex(/^[a-zA-Z\s]+$/).max(50).messages({
+        'string.pattern.base': 'Last name must contain only letters'
+    }),
+    gender: genderField,
     mothers_name: optionalStr().max(100),
-
-    // Birth details
-    dob_unknown: Joi.boolean().default(false),
-    dob: optionalStr().label('Date of Birth'),          // parsed in controller
-    age_years: optionalInt(),
-    age_months: optionalInt().max(11),
-    age_days: optionalInt().max(30),
-    birth_time_hours: Joi.number().integer().min(1).max(12).allow(null),
-    birth_time_minutes: Joi.number().integer().min(0).max(59).allow(null),
-    birth_time_ampm: Joi.string().valid('AM', 'PM').allow(null),
-};
-
-// ── Photo block ───────────────────────────────────────────────
-const photoFields = {
-    registration_date: Joi.date().allow(null),
-    photo: optionalStr().max(5 * 1024 * 1024),          // Base64 up to ~5 MB string
-    patient_photo: optionalStr(),                       // URL or Base64
-};
-
-// ── Parent / Guardian block ───────────────────────────────────
-const guardianFields = {
+    mother_name: optionalStr().max(100),
     father_name: optionalStr().max(100),
-    father_mobile: optionalStr().max(20),
     father_email: optionalEmail(),
     father_occupation: optionalStr().max(100),
-
-    mother_name: optionalStr().max(100),
-    mother_mobile: optionalStr().max(20),
     mother_email: optionalEmail(),
     mother_occupation: optionalStr().max(100),
-
+    wa_id: Joi.alternatives().try(
+        Joi.string().trim().min(8).max(50),
+        Joi.string().allow('', null)
+    ).label('WhatsApp ID / Mobile'),
+    mobile: Joi.string().trim().allow('', null),
+    parent_mobile: Joi.string().trim().allow('', null),
+    email: optionalEmail(),
     communication_preference: Joi.alternatives().try(
         Joi.boolean(),
         Joi.string().valid('Father', 'Mother', 'Both', 'WhatsApp', 'Email', 'SMS').insensitive().allow('', null)
     ),
-};
-
-// ── Contact block ─────────────────────────────────────────────
-const contactFields = {
-    area: optionalStr().max(200),
-    city: optionalStr().max(100),
-    state: optionalStr().max(100),
-    country: optionalStr().max(100),
-    pin_code: optionalStr().max(20),
-    phone_residence: optionalStr().max(20),
-    primary_address: optionalStr().max(500),
-    address: optionalStr().max(500),           // legacy
-    email: optionalEmail(),
-};
-
-// ── Additional details block ──────────────────────────────────
-const additionalFields = {
+    dob_unknown: Joi.boolean().allow(null),
+    dob: optionalStr().label('Date of Birth'),
+    age_years: optionalInt(),
+    age_months: optionalInt().max(11),
+    age_days: optionalInt().max(30),
+    registration_date: Joi.date().allow(null),
+    photo: optionalStr().max(5 * 1024 * 1024),
+    patient_photo: optionalStr(),
     source: optionalStr().max(200),
-    reference_details: optionalStr().max(500),
-    ref_details: optionalStr().max(500),
+    referred_by: optionalStr().max(500),
     home_branch: optionalStr().max(200),
     doctor: optionalStr().max(200),
     religion: optionalStr().max(100),
@@ -76,59 +59,49 @@ const additionalFields = {
     rating: optionalStr().max(50),
     remarks: optionalStr().max(1000),
     remark: optionalStr().max(1000),
-};
-
-// ── Enrollment / Status block ─────────────────────────────────
-const enrollmentFields = {
     enrollment_option: Joi.string()
-        .valid('just_enroll', 'send_to_specific')
+        .valid('just_enroll', 'send_to_specific', 'book_appointment')
         .insensitive()
-        .allow(null)
-        .default('just_enroll'),
-    send_to_specific: Joi.boolean().default(false),
-    is_active: Joi.boolean().default(true),
+        .allow(null),
+    send_to_specific: Joi.boolean(),
+    is_active: Joi.boolean(),
+    registration_source: Joi.string()
+        .valid('whatsapp', 'form', 'dashboard', 'api')
+        .lowercase(),
+    child_name: Joi.string().trim().max(100).allow('', null),
+    parent_name: Joi.string().trim().max(100).allow('', null),
 };
 
-// ─────────────────────────────────────────────────────────────
-const patientSchemas = {
-    // POST /api/patients
-    register: Joi.object({
-        // Required
-        // Required (either child_name OR names must be present, handled in logic)
-        child_name: Joi.string().trim().max(100).allow('', null),
-        parent_name: Joi.string().trim().max(100).allow('', null),
-        wa_id: Joi.alternatives().try(
-            Joi.string().trim().min(8).max(50),
-            Joi.string().allow('', null)
-        ).required().label('WhatsApp ID / Mobile'),
-        mobile: Joi.string().trim().allow('', null),      // fallback alias
-        parent_mobile: Joi.string().trim().allow('', null), // user request
-        registration_source: Joi.string()
-            .valid('whatsapp', 'form', 'dashboard', 'api')
-            .default('dashboard'),
-
-        ...personalFields,
-        ...photoFields,
-        ...guardianFields,
-        ...contactFields,
-        ...additionalFields,
-        ...enrollmentFields,
+const registerSchema = Joi.object({
+    ...basePatientFields,
+    // Overwrite required fields for registration
+    first_name: Joi.string().trim().required().messages({ 'any.required': 'First name is required' }),
+    last_name: Joi.string().trim().required().messages({ 'any.required': 'Last name is required' }),
+    gender: Joi.string().required().messages({ 'any.required': 'Gender is required' }),
+    dob: Joi.alternatives().try(
+        Joi.date().iso(),
+        Joi.string().pattern(/^\d{2}\/\d{2}\/\d{4}$/)
+    ).required().messages({
+        'any.required': 'Date of Birth is required',
+        'alternatives.match': 'Date of Birth must be in YYYY-MM-DD or DD/MM/YYYY format'
     }),
+    email: Joi.string().email().lowercase().trim().required().messages({
+        'any.required': 'Email Address is required',
+        'string.email': 'Invalid email format'
+    }),
+}).or('wa_id', 'mobile', 'parent_mobile');
 
-    // PUT /api/patients/:id
-    update: Joi.object({
-        child_name: Joi.string().trim().min(2).max(100),
-        parent_name: optionalStr().max(100),
-        wa_id: Joi.string().trim().min(8).max(50).label('WhatsApp ID / Mobile'),
-        is_deleted: Joi.boolean(),
+const updateSchema = Joi.object({
+    ...basePatientFields,
+    // In updates, everything is optional
+    child_name: Joi.string().trim().min(2).max(100),
+    is_deleted: Joi.boolean(),
+}).min(1);
 
-        ...personalFields,
-        ...photoFields,
-        ...guardianFields,
-        ...contactFields,
-        ...additionalFields,
-        ...enrollmentFields,
-    }).min(1), // At least one field required for update
+module.exports = {
+    register: registerSchema,
+    update: updateSchema
 };
 
-module.exports = patientSchemas;
+
+

@@ -9,7 +9,8 @@ const {
     getEntryByAppointment,
     addVaccinationRecord,
     lockMRDEntry,
-    uploadMRDAttachment
+    uploadMRDAttachment,
+    sendPrescriptionViaWhatsApp
 } = require('./mrd.controller');
 const auth = require('../../middleware/auth');
 const authorize = require('../../middleware/rbac');
@@ -17,15 +18,20 @@ const authorize = require('../../middleware/rbac');
 // All MRD endpoints — auth allows public access by default
 
 // All MRD endpoints — Protected (Restricted access)
-router.post('/vaccination', authorize(['superadmin', 'admin', 'doctor', 'staff']), addVaccinationRecord);
-router.post('/entry', authorize(['superadmin', 'admin', 'doctor']), addMRDEntry);
-router.patch('/entry/:id', authorize(['superadmin', 'admin', 'doctor']), updateMRDEntry);
-router.get('/appointment/:appointment_id', authorize(['superadmin', 'admin', 'doctor', 'staff', 'secretary']), getEntryByAppointment);
-router.patch('/entry/:id/lock', authorize(['superadmin', 'admin', 'doctor']), lockMRDEntry);
-router.post('/entry/:id/attachment', authorize(['superadmin', 'admin', 'doctor', 'staff', 'secretary']), uploadMRDAttachment);
+const MRD_ROLES = ['superadmin', 'admin', 'doctor', 'nurse', 'staff'];
 
-router.get('/:patient_id/export', authorize(['superadmin', 'admin', 'doctor', 'staff', 'secretary']), exportMRD);
-router.get('/:patient_id', authorize(['superadmin', 'admin', 'doctor', 'staff', 'secretary']), getMRDByPatientId);
-router.put('/:mrd_id', authorize(['superadmin', 'admin', 'doctor']), updateMRDById);
+router.use(auth); // Ensure all routes below are authenticated
+
+router.post('/vaccination', authorize(MRD_ROLES), addVaccinationRecord);
+router.post('/entry', authorize(MRD_ROLES), addMRDEntry);
+router.patch('/entry/:id', authorize(MRD_ROLES), updateMRDEntry);
+router.get('/appointment/:appointment_id', authorize(MRD_ROLES), getEntryByAppointment);
+router.patch('/entry/:id/lock', authorize(['superadmin', 'admin', 'doctor']), lockMRDEntry);
+router.post('/entry/:id/attachment', authorize(MRD_ROLES), uploadMRDAttachment);
+router.post('/entry/:id/send-whatsapp', authorize(MRD_ROLES), sendPrescriptionViaWhatsApp);
+
+router.get('/:patient_id/export', authorize(MRD_ROLES), exportMRD);
+router.get('/:patient_id', authorize(MRD_ROLES), getMRDByPatientId);
+router.put('/:mrd_id', authorize(MRD_ROLES), updateMRDById);
 
 module.exports = router;

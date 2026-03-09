@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { encrypt, decrypt, maskData, hashField } = require('../utils/encryption');
+const { normalizeGender } = require('../utils/helpers');
 
 const PatientSchema = new mongoose.Schema({
   // ── Core / System ────────────────────────────────────────────
@@ -8,6 +9,21 @@ const PatientSchema = new mongoose.Schema({
     unique: true,
     required: true,
     index: true
+  },
+  patient_uid: {
+    type: String,
+    unique: true,
+    required: true,
+    index: true
+  },
+
+  // Human-readable unique key, e.g. "26-RK-01" (Year-Initials-Sequence)
+  patient_key: {
+    type: String,
+    unique: true,
+    sparse: true,   // allows null for old records
+    index: true,
+    default: null
   },
 
   // WhatsApp / primary contact phone (encrypted)
@@ -26,7 +42,7 @@ const PatientSchema = new mongoose.Schema({
   // ── Section 1: Personal Information ──────────────────────────
   salutation: {
     type: String,
-    enum: ['Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Master', 'Miss', null],
+    enum: ['Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Master', 'Miss', 'Baby', 'Baby of', '', null],
     default: null
   },
   first_name: {
@@ -52,7 +68,8 @@ const PatientSchema = new mongoose.Schema({
   },
   gender: {
     type: String,
-    enum: ['Male', 'Female', 'Other'],
+    enum: ['boy', 'girl', null],
+    set: (v) => normalizeGender(v),
     default: null
   },
   mothers_name: {
@@ -83,29 +100,13 @@ const PatientSchema = new mongoose.Schema({
     type: Number,
     default: null
   },
-  birth_time_hours: {
-    type: Number,
-    min: 1,
-    max: 12,
-    default: null
-  },
-  birth_time_minutes: {
-    type: Number,
-    min: 0,
-    max: 59,
-    default: null
-  },
-  birth_time_ampm: {
-    type: String,
-    enum: ['AM', 'PM', null],
-    default: null
-  },
 
   // ── Section 2: Photograph & Patient ID ───────────────────────
   registration_date: {
     type: Date,
     default: Date.now
   },
+  // Deprecated: use patient_photo instead
   photo: {
     type: String,   // Base64 encoded string or URL
     default: null
@@ -115,14 +116,10 @@ const PatientSchema = new mongoose.Schema({
     default: null
   },
 
+
   // ── Section 3: Parent / Guardian Information ─────────────────
   // Father
   father_name: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  father_mobile: {
     type: String,
     trim: true,
     default: null
@@ -141,11 +138,6 @@ const PatientSchema = new mongoose.Schema({
 
   // Mother
   mother_name: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  mother_mobile: {
     type: String,
     trim: true,
     default: null
@@ -174,47 +166,6 @@ const PatientSchema = new mongoose.Schema({
     default: null
   },
 
-  // ── Section 4: Contact Information ───────────────────────────
-  area: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  city: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  state: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  country: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  pin_code: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  phone_residence: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  primary_address: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  // Kept for backward-compat
-  address: {
-    type: String,
-    default: null
-  },
   // Encrypted primary email (for portal login / comms)
   email: {
     type: String,
@@ -235,12 +186,7 @@ const PatientSchema = new mongoose.Schema({
     trim: true,
     default: null
   },
-  reference_details: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  ref_details: {
+  referred_by: {
     type: String,
     trim: true,
     default: null
@@ -274,11 +220,13 @@ const PatientSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+
   remarks: {
     type: String,
     trim: true,
     default: null
   },
+  // Deprecated: use remarks instead
   remark: {
     type: String,
     trim: true,
@@ -288,7 +236,7 @@ const PatientSchema = new mongoose.Schema({
   // ── Section 6: Enrollment Options ────────────────────────────
   enrollment_option: {
     type: String,
-    enum: ['just_enroll', 'send_to_specific', null],
+    enum: ['just_enroll', 'send_to_specific', 'book_appointment', null],
     default: 'just_enroll'
   },
   send_to_specific: {
@@ -350,6 +298,9 @@ PatientSchema.pre('save', function () {
     this.email_hash = hashField(rawVal);
   }
 
+  if (this.isModified('first_name') || this.isModified('middle_name') || this.isModified('last_name')) {
+    this.child_name = [this.first_name, this.middle_name, this.last_name].filter(Boolean).join(' ');
+  }
   this.last_updated_at = new Date();
 });
 
@@ -387,3 +338,4 @@ PatientSchema.virtual('mrd', {
 });
 
 module.exports = mongoose.model('Patient', PatientSchema);
+

@@ -14,8 +14,8 @@ const auth = require('../../middleware/auth');
  *     tags: [Config]
  */
 
-// Protected by API Key or JWT
-router.get('/', auth, getConfig);
-router.patch('/', auth, updateConfig);
+// Publicly accessible via endpoints
+router.get('/', getConfig);
+router.patch('/', updateConfig);
 
 module.exports = router;

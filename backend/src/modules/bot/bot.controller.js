@@ -6,8 +6,6 @@ const Patient = require('../../models/Patient');
 const Doctor = require('../../models/Doctor');
 const Appointment = require('../../models/Appointment');
 const DoctorAvailability = require('../../models/DoctorAvailability');
-const Slot = require('../../models/Slot');
-const SlotAvailability = require('../../models/SlotAvailability');
 const MRD = require('../../models/MRD');
 const audit = require('../../utils/audit');
 const { normalizeWaId, normalizePhone, toMidnight, canonicalizeDoctorName, extractMobile } = require('../../utils/helpers');
@@ -27,12 +25,10 @@ const WORKFLOW_STAGES = [
 // Helper: normalise wa_id — accept wa_id or wa_number in body
 const getWaId = (body) => body ? normalizeWaId(body.wa_id || body.wa_number) : null;
 
-// Helper: enrich appointment with slot and mrd status for bot
+// Helper: enrich appointment with mrd status for bot
 const enrichAppointmentBot = async (a) => {
-    const [patient, slot, availability, mrdEntry] = await Promise.all([
+    const [patient, mrdEntry] = await Promise.all([
         Patient.findOne({ patient_id: a.patient_id }),
-        Slot.findOne({ slot_id: a.slot_id }),
-        SlotAvailability.findOne({ slot_id: a.slot_id, slot_date: a.appointment_date, doctor_name: a.doctor_name }),
         MRD.findOne({ 'entries.appointment_id': a.appointment_id })
     ]);
     return {
@@ -43,10 +39,7 @@ const enrichAppointmentBot = async (a) => {
         parent_mobile: patient?.wa_id || null,
         wa_id: a.wa_id || patient?.wa_id || null,
         formatted_date: a.appointment_date ? a.appointment_date.toISOString().split('T')[0] : null,
-        slot_label: availability?.custom_label || slot?.slot_label || slot?.display_label || null,
-        start_time: availability?.custom_start_time || slot?.start_time || null,
-        end_time: availability?.custom_end_time || slot?.end_time || null,
-        session: slot?.session || null,
+        start_time: a.appointment_time || null,
         has_mrd_entry: !!mrdEntry
     };
 };
@@ -307,30 +300,76 @@ exports.logChat = async (req, res) => {
 };
 
 // @desc    Get chat history — works for registered AND unregistered numbers
-// @route   GET /api/bot/chat/history/:wa_id
+// @route   GET /api/bot/chat/history
 exports.getChatHistory = async (req, res) => {
     try {
-        const target = normalizeWaId(req.params.wa_id);
-        const limit = Math.min(parseInt(req.query.limit) || 10, 100);
+        const { wa_id, child_name, start_date, end_date, limit = 50, page = 1 } = req.query;
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(100, parseInt(limit));
 
-        // Try to find patient for enrichment — OK if not found
-        const patients = await findPatientsByWa(target);
-        const patient = patients[0] || null;
+        let query = {};
 
-        const history = await BotChatHistory.find({ wa_id: target })
-            .sort({ timestamp: -1 })
-            .limit(limit)
-            .lean();
+        // 1. Filter by wa_id (mobile)
+        if (wa_id) {
+            query.wa_id = normalizeWaId(wa_id);
+        }
+
+        // 2. Filter by patient name (child_name)
+        if (child_name) {
+            const patients = await Patient.find({
+                child_name: { $regex: child_name, $options: 'i' },
+                is_deleted: false
+            }).select('patient_id');
+            const patientIds = patients.map(p => p.patient_id);
+
+            if (query.wa_id) {
+                // If wa_id also provided, it must match either
+                query = {
+                    $and: [
+                        { wa_id: query.wa_id },
+                        { $or: [{ patient_id: { $in: patientIds } }] }
+                    ]
+                };
+            } else {
+                query.patient_id = { $in: patientIds };
+            }
+        }
+
+        // 3. Date Range
+        if (start_date || end_date) {
+            query.timestamp = {};
+            if (start_date) query.timestamp.$gte = new Date(start_date);
+            if (end_date) {
+                const end = new Date(end_date);
+                end.setHours(23, 59, 59, 999);
+                query.timestamp.$lte = end;
+            }
+        }
+
+        const [history, total] = await Promise.all([
+            BotChatHistory.find(query)
+                .sort({ timestamp: -1 })
+                .skip((pageNum - 1) * limitNum)
+                .limit(limitNum)
+                .lean(),
+            BotChatHistory.countDocuments(query)
+        ]);
+
+        // Enrich with patient details for the UI
+        const enriched = await Promise.all(history.map(async (msg) => {
+            if (msg.patient_id) {
+                const p = await Patient.findOne({ patient_id: msg.patient_id }).select('child_name parent_name');
+                return { ...msg, patient_details: p };
+            }
+            return msg;
+        }));
 
         res.json({
             success: true,
-            wa_id: target,
-            is_registered: patients.length > 0,
-            patient_id: patients.length === 1 ? (patient?.patient_id || null) : null,
-            total_matches: patients.length,
-            child_name: patient ? (patient.child_name || patient.full_name || null) : null,
-            total: history.length,
-            data: history
+            total,
+            page: pageNum,
+            pages: Math.ceil(total / limitNum),
+            data: enriched
         });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -608,77 +647,6 @@ exports.getDoctorAvailabilityBot = async (req, res) => {
     }
 };
 
-// @desc    Get available slots for bot
-// @route   GET /api/bot/slots/available
-exports.getAvailableSlotsBot = async (req, res) => {
-    try {
-        const { doctor_id, date } = req.query;
-        if (!doctor_id) return res.status(400).json({ success: false, message: 'doctor_id is required' });
-
-        const queryDate = toMidnight(date || new Date());
-        const dayOfWeek = queryDate.getUTCDay();
-        const now = new Date();
-        const isToday = queryDate.getUTCFullYear() === now.getUTCFullYear() &&
-            queryDate.getUTCMonth() === now.getUTCMonth() &&
-            queryDate.getUTCDate() === now.getUTCDate();
-
-        const doctor = await Doctor.findOne({ doctor_id, is_active: true });
-        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found or inactive' });
-
-        const allTemplates = await Slot.find({ is_active: true }).sort({ start_time: 1 });
-
-        const doctorSlotIds = doctor.available_slots?.get(dayOfWeek.toString()) || [];
-        let todayTemplates = [];
-        if (doctorSlotIds.length === 0) {
-            todayTemplates = allTemplates.filter(t => {
-                const safeName = doctor.name.replace(/\./g, '');
-                const perDoctor = t.days_by_doctor?.get(safeName) || t.days_by_doctor?.get(doctor.name);
-                const activeDays = (perDoctor && perDoctor.length > 0) ? perDoctor : (t.days_of_week || [0, 1, 2, 3, 4, 5, 6]);
-                return activeDays.includes(dayOfWeek);
-            });
-        } else {
-            todayTemplates = allTemplates.filter(t => doctorSlotIds.includes(t.slot_id));
-        }
-
-        const dailyAvailability = await SlotAvailability.find({ slot_date: queryDate, doctor_id });
-        const statusMap = new Map(dailyAvailability.map(a => [a.slot_id, a]));
-
-        const available = todayTemplates
-            .filter(t => {
-                const status = statusMap.get(t.slot_id);
-                if (status && (status.is_booked || status.blocked_by_admin)) return false;
-                if (isToday) {
-                    const [h, m] = (status?.custom_start_time || t.start_time).split(':');
-                    const slotMins = parseInt(h) * 60 + parseInt(m);
-                    const clinicNow = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
-                    const nowMins = clinicNow.getUTCHours() * 60 + clinicNow.getUTCMinutes();
-                    if (slotMins < nowMins - 5) return false;
-                }
-                return true;
-            })
-            .map(t => {
-                const status = statusMap.get(t.slot_id);
-                return {
-                    slot_id: t.slot_id,
-                    label: status?.custom_label || t.slot_label || t.display_label,
-                    session: t.session,
-                    start_time: status?.custom_start_time || t.start_time,
-                    end_time: status?.custom_end_time || t.end_time
-                };
-            });
-
-        res.json({
-            success: true,
-            date: queryDate.toISOString().split('T')[0],
-            doctor_id,
-            doctor_name: doctor.name,
-            data: available
-        });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-};
-
 // @desc    Get upcoming appointments by WA for bot
 // @route   GET /api/bot/appointments/by-wa/:wa_id
 exports.getAppointmentsByWaBot = async (req, res) => {
@@ -708,7 +676,7 @@ exports.getAppointmentsByWaBot = async (req, res) => {
             patient_id: patient.patient_id,
             status: { $in: ['BOOKED', 'CONFIRMED'] },
             appointment_date: dateFilter
-        }).sort({ appointment_date: 1, slot_id: 1 });
+        }).sort({ appointment_date: 1 });
         if (maxLimit) appointmentsQuery = appointmentsQuery.limit(maxLimit);
 
         const appointments = await appointmentsQuery;
@@ -780,150 +748,4 @@ exports.getTokenStatusBot = async (req, res) => {
     }
 };
 
-// Helper: Get available slots for a doctor on a specific date
-const getSlotsForDate = async (doctor, queryDate, allTemplates) => {
-    const dayOfWeek = queryDate.getUTCDay();
-    const now = new Date();
-    const isToday = queryDate.getUTCFullYear() === now.getUTCFullYear() &&
-        queryDate.getUTCMonth() === now.getUTCMonth() &&
-        queryDate.getUTCDate() === now.getUTCDate();
-
-    const doctorSlotIds = doctor.available_slots?.get(dayOfWeek.toString()) || [];
-    let todayTemplates = [];
-    if (doctorSlotIds.length === 0) {
-        todayTemplates = allTemplates.filter(t => {
-            const safeName = doctor.name.replace(/\./g, '');
-            const perDoctor = t.days_by_doctor?.get(safeName) || t.days_by_doctor?.get(doctor.name);
-            const activeDays = (perDoctor && perDoctor.length > 0) ? perDoctor : (t.days_of_week || [0, 1, 2, 3, 4, 5, 6]);
-            return activeDays.includes(dayOfWeek);
-        });
-    } else {
-        todayTemplates = allTemplates.filter(t => doctorSlotIds.includes(t.slot_id));
-    }
-
-    const dailyAvailability = await SlotAvailability.find({
-        slot_date: queryDate,
-        doctor_id: doctor.doctor_id
-    });
-    const statusMap = new Map(dailyAvailability.map(a => [a.slot_id, a]));
-
-    return todayTemplates
-        .filter(t => {
-            const status = statusMap.get(t.slot_id);
-            if (status && (status.is_booked || status.blocked_by_admin)) return false;
-            if (isToday) {
-                const [h, m] = (status?.custom_start_time || t.start_time).split(':');
-                const slotMins = parseInt(h) * 60 + parseInt(m);
-                const clinicNow = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
-                const nowMins = clinicNow.getUTCHours() * 60 + clinicNow.getUTCMinutes();
-                if (slotMins < nowMins - 5) return false;
-            }
-            return true;
-        })
-        .map(t => {
-            const status = statusMap.get(t.slot_id);
-            return {
-                slot_id: t.slot_id,
-                label: status?.custom_label || t.slot_label || t.display_label,
-                session: t.session,
-                start_time: status?.custom_start_time || t.start_time,
-                end_time: status?.custom_end_time || t.end_time
-            };
-        });
-};
-
-// @desc    Get available slots for bot
-// @route   GET /api/bot/slots/available
-exports.getAvailableSlotsBot = async (req, res) => {
-    try {
-        const { doctor_id, doctor_name, date } = req.query;
-        if (!doctor_id && !doctor_name) return res.status(400).json({ success: false, message: 'doctor_id or doctor_name is required' });
-
-        const queryDate = toMidnight(date || new Date());
-        let doctor = null;
-        if (doctor_id) {
-            doctor = await Doctor.findOne({ doctor_id, is_active: true });
-        } else if (doctor_name) {
-            const canonical = canonicalizeDoctorName(doctor_name);
-            doctor = await Doctor.findOne({
-                $or: [
-                    { name: { $regex: new RegExp(`^${doctor_name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
-                    { name: { $regex: new RegExp(`^${canonical.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
-                ],
-                is_active: true
-            });
-        }
-
-        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found or inactive' });
-
-        const allTemplates = await Slot.find({ is_active: true }).sort({ start_time: 1 });
-        const available = await getSlotsForDate(doctor, queryDate, allTemplates);
-
-        res.json({
-            success: true,
-            date: queryDate.toISOString().split('T')[0],
-            doctor_id: doctor.doctor_id,
-            doctor_name: doctor.name,
-            data: available
-        });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-};
-
-// @desc    Get availability summary for next X days for bot
-// @route   GET /api/bot/slots/available-dates
-exports.getAvailableDatesBot = async (req, res) => {
-    try {
-        const { doctor_id, doctor_name, days = 14 } = req.query;
-        if (!doctor_id && !doctor_name) return res.status(400).json({ success: false, message: 'doctor_id or doctor_name is required' });
-
-        let doctor = null;
-        if (doctor_id) {
-            doctor = await Doctor.findOne({ doctor_id, is_active: true });
-        } else if (doctor_name) {
-            const canonical = canonicalizeDoctorName(doctor_name);
-            doctor = await Doctor.findOne({
-                $or: [
-                    { name: { $regex: new RegExp(`^${doctor_name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
-                    { name: { $regex: new RegExp(`^${canonical.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
-                ],
-                is_active: true
-            });
-        }
-        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found or inactive' });
-
-        const allTemplates = await Slot.find({ is_active: true }).sort({ start_time: 1 });
-        const result = [];
-        const maxDays = Math.min(parseInt(days), 31);
-
-        for (let i = 0; i < maxDays; i++) {
-            const date = new Date();
-            date.setDate(date.getDate() + i);
-            const queryDate = toMidnight(date);
-
-            const availableSlots = await getSlotsForDate(doctor, queryDate, allTemplates);
-
-            if (availableSlots.length > 0) {
-                result.push({
-                    date: queryDate.toISOString().split('T')[0],
-                    day: queryDate.toLocaleDateString('en-US', { weekday: 'long' }),
-                    available_count: availableSlots.length,
-                    first_slot: availableSlots[0].start_time
-                });
-            }
-        }
-
-        res.json({
-            success: true,
-            doctor_id: doctor.doctor_id,
-            doctor_name: doctor.name,
-            days_checked: maxDays,
-            data: result
-        });
-    } catch (err) {
-        console.error('[getAvailableDatesBot]', err);
-        res.status(500).json({ success: false, error: err.message });
-    }
-};
-
+// Slot endpoints removed in favor of token system

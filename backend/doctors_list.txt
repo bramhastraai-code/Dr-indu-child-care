@@ -1,0 +1,5 @@
+Total doctors: 4
+- Dr. Rutik (DOC-00002), Active: true, Speciality: Pediatrics
+- Dr. Deepak (DOC-00004), Active: false, Speciality: Pediatrics
+- Dr. Krishna (DOC-00006), Active: false, Speciality: Pediatrics
+- Dr. Indu (DOC-00009), Active: true, Speciality: Pediatrics

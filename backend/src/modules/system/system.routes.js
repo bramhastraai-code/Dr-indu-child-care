@@ -16,9 +16,9 @@ const auth = require('../../middleware/auth');
  *     tags: [System]
  */
 router.get('/health', getHealth);
-router.get('/config', auth, getConfig);
-router.put('/config', auth, updateConfig);
-router.get('/audit-logs', auth, getAuditLogs);
+router.get('/config', getConfig);
+router.put('/config', updateConfig);
+router.get('/audit-logs', getAuditLogs);
 
 
 module.exports = router;

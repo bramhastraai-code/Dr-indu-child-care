@@ -48,7 +48,9 @@ function to12h(timeStr) {
  * Runs when POST /api/doctor/availability/update is called with status=LATE
  */
 async function handleDoctorLate(doctorId, doctorName, minutesLate, etaTime) {
+    console.log(`[DoctorLate] Starting for ${doctorName} (${doctorId}), minutes: ${minutesLate}`);
     const today = toMidnight(new Date());
+
     const batchId = newBatchId();
     const CLINIC_NAME = process.env.CLINIC_NAME || 'Dr. Indu Child Care Clinic';
     const CLINIC_ADDRESS = process.env.CLINIC_ADDRESS || 'Dr. Indu Child Care Clinic';

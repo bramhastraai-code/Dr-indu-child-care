@@ -6,8 +6,7 @@ const {
     createDoctor,
     updateDoctor,
     deleteDoctor,
-    getDoctorSchedule,
-    updateDoctorSchedule
+    getDoctorHistory
 } = require('./doctor.controller');
 const validate = require('../../middleware/validate');
 const { createDoctor: createSchema, updateDoctor: updateSchema } = require('./doctor.validator');
@@ -17,13 +16,12 @@ const authorize = require('../../middleware/rbac');
 const DOCTOR_MANAGE_ROLES = ['superadmin', 'admin'];
 const DOCTOR_VIEW_ROLES = ['superadmin', 'admin', 'staff', 'secretary', 'doctor'];
 
-// All routes use auth which defaults to public access
-router.get('/', auth, authorize(DOCTOR_VIEW_ROLES), getDoctors);
-router.get('/:doctor_id/schedule', auth, authorize(DOCTOR_VIEW_ROLES), getDoctorSchedule);
-router.post('/', auth, authorize(DOCTOR_MANAGE_ROLES), validate(createSchema), createDoctor);
-router.patch('/:doctor_id/schedule', auth, authorize(DOCTOR_VIEW_ROLES), updateDoctorSchedule);
-router.get('/:doctor_id', auth, authorize(DOCTOR_VIEW_ROLES), getDoctorById);
-router.patch('/:doctor_id', auth, authorize(DOCTOR_VIEW_ROLES), validate(updateSchema), updateDoctor);
-router.delete('/:doctor_id', auth, authorize(DOCTOR_MANAGE_ROLES), deleteDoctor);
+// All routes are now public
+router.get('/', getDoctors);
+router.post('/', validate(createSchema), createDoctor);
+router.get('/:doctor_id', getDoctorById);
+router.get('/:doctor_id/history', getDoctorHistory);
+router.patch('/:doctor_id', validate(updateSchema), updateDoctor);
+router.delete('/:doctor_id', deleteDoctor);
 
 module.exports = router;

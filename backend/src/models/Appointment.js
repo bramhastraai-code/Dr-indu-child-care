@@ -38,20 +38,31 @@ const AppointmentSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    // Deprecated: use visit_category instead
     visit_type: {
         type: String,
-        enum: ['VACCINATION', 'CONSULTATION', 'PULMONARY', 'FOLLOWUP'],
-        default: 'CONSULTATION'
+        default: null
+    },
+    visit_category: {
+        type: String,
+        enum: ['First visit', 'Follow-up', 'Vaccination', 'Other'],
+        default: 'First visit',
+        required: true
+    },
+    token_pool: {
+        type: String,
+        enum: ['ONLINE', 'WALK_IN'],
+        default: 'ONLINE'
+    },
+    registration_type: {
+        type: String,
+        enum: ['online', 'walkin'],
+        required: true
     },
     appointment_date: {
         type: Date,
         required: true,
         index: true
-    },
-    slot_id: {
-        type: String,
-        ref: 'Slot',
-        required: true
     },
     // Human-readable time label stored for quick display (e.g. "11:00")
     appointment_time: {
@@ -71,8 +82,8 @@ const AppointmentSchema = new mongoose.Schema({
     // appointment_status: the lifecycle state of this appointment
     status: {
         type: String,
-        enum: ['BOOKED', 'CONFIRMED', 'COMPLETED', 'CANCELLED', 'NO_SHOW'],
-        default: 'CONFIRMED'
+        enum: ['PENDING', 'CHECKED_IN', 'COMPLETED', 'CANCELLED', 'BOOKED', 'CONFIRMED', 'NO_SHOW'], // Standardized to UPPERCASE
+        default: 'PENDING'
     },
     // booking_source: which channel created this appointment
     booking_source: {
@@ -91,16 +102,21 @@ const AppointmentSchema = new mongoose.Schema({
     cancellation_reason: { type: String, default: null },
     secretary_notes: { type: String, default: null },
     // ── Token / Queue System ──────────────────────────────────────────
-    // Daily sequential token number per doctor (e.g. 1, 2, 3...)
+    // Daily sequential token number per pool (e.g. ONL-1, WLK-1)
     token_number: { type: Number, default: null, index: true },
-    // WAITING = in queue, CHECKED_IN = arrived, IN_PROGRESS = being seen, COMPLETED, SKIPPED, NO_SHOW
+    token_display: { type: String, default: null }, // e.g. "O-1", "W-1"
+
+    // Status Transitions: 
+    // PENDING -> WAITING (Token Assigned) -> CHECKED_IN (At Clinic) -> IN_PROGRESS (With Doctor) -> COMPLETED (Checked Out)
     token_status: {
         type: String,
-        enum: ['WAITING', 'CHECKED_IN', 'IN_PROGRESS', 'COMPLETED', 'SKIPPED', 'NO_SHOW', null],
-        default: null
+        enum: ['PENDING', 'WAITING', 'CHECKED_IN', 'IN_PROGRESS', 'COMPLETED', 'SKIPPED', 'NO_SHOW', null],
+        default: 'PENDING'
     },
     // When the patient physically checked in at clinic
     check_in_time: { type: Date, default: null },
+    checked_in_at: { type: Date, default: null },
+    checked_out_at: { type: Date, default: null },
     // When this token was called to see the doctor
     called_at: { type: Date, default: null },
     is_deleted: {
@@ -135,5 +151,12 @@ AppointmentSchema.virtual('mrd_entry', {
 
 // Compound index for the one-appointment-per-patient-per-day rule
 AppointmentSchema.index({ patient_id: 1, appointment_date: 1 });
+
+// Unique index to prevent duplicate tokens per doctor per pool per day
+// Note: Partial index ensures we only enforce this when token_number is set
+AppointmentSchema.index(
+    { doctor_id: 1, appointment_date: 1, token_number: 1, token_pool: 1 },
+    { unique: true, partialFilterExpression: { token_number: { $type: "number" }, is_deleted: false } }
+);
 
 module.exports = mongoose.model('Appointment', AppointmentSchema);

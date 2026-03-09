@@ -1,6 +1,5 @@
 const Doctor = require('../../models/Doctor');
-const Slot = require('../../models/Slot');
-const SlotAvailability = require('../../models/SlotAvailability');
+const DoctorAvailability = require('../../models/DoctorAvailability');
 const Appointment = require('../../models/Appointment');
 const MRD = require('../../models/MRD');
 const audit = require('../../utils/audit');
@@ -32,28 +31,12 @@ const propagateDoctorNameChange = async (oldName, newName, doctorId) => {
 
         console.log(`[INFO] Propagating doctor name change: "${oldName}" -> "${newName}" (${doctorId})`);
 
-        // 1. Update Slot templates (days_by_doctor map)
-        const safeOld = oldName.replace(/\./g, '');
-        const safeNew = newName.replace(/\./g, '');
-        const slots = await Slot.find({
-            $or: [
-                { [`days_by_doctor.${safeOld}`]: { $exists: true } },
-                { [`days_by_doctor.${oldName}`]: { $exists: true } }
-            ]
-        });
-        for (const slot of slots) {
-            const days = slot.days_by_doctor.get(safeOld) || slot.days_by_doctor.get(oldName);
-            slot.days_by_doctor.set(safeNew, days);
-            slot.days_by_doctor.delete(safeOld);
-            slot.days_by_doctor.delete(oldName);
-            await slot.save();
-        }
-
-        // 2. Update SlotAvailability
-        await SlotAvailability.updateMany(
+        // 1. Update DoctorAvailability
+        await DoctorAvailability.updateMany(
             { $or: [{ doctor_id: doctorId }, { doctor_name: oldName }] },
             { doctor_name: newName, doctor_id: doctorId }
         );
+
 
         // 3. Update Appointments
         await Appointment.updateMany(
@@ -89,36 +72,6 @@ const propagateDoctorNameChange = async (oldName, newName, doctorId) => {
     }
 };
 
-/**
- * Connects a new doctor to all existing slots with default availability
- * @param {string} doctorName 
- * @param {number[]} [days] - Specific days of week doctor is available
- */
-const connectDoctorToSlots = async (doctorName, days) => {
-    try {
-        const slots = await Slot.find({ is_active: true });
-        const safeName = doctorName.replace(/\./g, '');
-        const targetDays = (days && Array.isArray(days) && days.length > 0)
-            ? days
-            : [1, 2, 3, 4, 5, 6]; // Default: Mon-Sat
-
-        for (const slot of slots) {
-            // Only add if not already present or needs update
-            if (!slot.days_by_doctor.has(safeName)) {
-                // Use intersection of doctor's working days and slot's available days
-                const slotDays = slot.days_of_week || [0, 1, 2, 3, 4, 5, 6];
-                const intersection = targetDays.filter(d => slotDays.includes(d));
-
-                if (intersection.length > 0) {
-                    slot.days_by_doctor.set(safeName, intersection);
-                    await slot.save();
-                }
-            }
-        }
-    } catch (err) {
-        console.error('[ERROR] connectDoctorToSlots:', err.message);
-    }
-};
 
 // GET /api/doctors
 exports.getDoctors = async (req, res) => {
@@ -126,14 +79,22 @@ exports.getDoctors = async (req, res) => {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
         const { all } = req.query;
+        const isAll = all === 'true' || all === true;
         const sessionDoctorId = getDoctorIdFromSession(req);
-        const query = sessionDoctorId
-            ? { doctor_id: sessionDoctorId, ...(all === 'true' ? {} : { is_active: true }) }
-            : (all === 'true' ? {} : { is_active: true });
+
+        // If 'all=true' is passed, we mostly want a full list (e.g. for selection dropdowns)
+        // We only restrict to sessionDoctorId if the user IS a doctor AND they are NOT asking for 'all'
+        const query = (sessionDoctorId && !isAll)
+            ? { doctor_id: sessionDoctorId, ...(isAll ? {} : { is_active: true }) }
+            : (isAll ? {} : { is_active: true });
+
+        console.log(`[DEBUG] getDoctors: all=${all}, sessionDoctorId=${sessionDoctorId}, query=${JSON.stringify(query)}`);
 
         const doctors = await Doctor.find(query)
-            .select('name doctor_id speciality -_id')
+            .select('name doctor_id speciality is_active -_id')
             .sort({ name: 1 });
+
+        console.log(`[DEBUG] getDoctors results: found ${doctors.length} doctors`);
 
         res.json({
             success: true,
@@ -175,10 +136,6 @@ exports.createDoctor = async (req, res, next) => {
             doctor_id
         });
 
-        // Automatically connect doctor to slots so they show up in the slots sheet
-        if (doctor.is_active !== false) {
-            await connectDoctorToSlots(doctor.name, req.body.working_days);
-        }
 
         const auditDoctor = doctor.toObject();
         delete auditDoctor.password_hash;
@@ -239,26 +196,6 @@ exports.updateDoctor = async (req, res) => {
             await propagateDoctorNameChange(oldName, newName, req.params.doctor_id);
         }
 
-        // If reactivated, ensure they are in the slots sheet
-        if (!wasActive && doctor.is_active) {
-            await connectDoctorToSlots(doctor.name);
-        }
-
-        // If deactivated, remove from slot templates to keep UI clean
-        if (wasActive && doctor.is_active === false) {
-            const safeOld = oldName.replace(/\./g, '');
-            const slots = await Slot.find({
-                $or: [
-                    { [`days_by_doctor.${safeOld}`]: { $exists: true } },
-                    { [`days_by_doctor.${oldName}`]: { $exists: true } }
-                ]
-            });
-            for (const slot of slots) {
-                slot.days_by_doctor.delete(safeOld);
-                slot.days_by_doctor.delete(oldName);
-                await slot.save();
-            }
-        }
 
         const auditValue = { ...updatePayload };
         if (Object.prototype.hasOwnProperty.call(auditValue, 'password_hash')) {
@@ -296,19 +233,6 @@ exports.deleteDoctor = async (req, res) => {
         const doctorName = doctor.name;
         await Doctor.deleteOne({ doctor_id: req.params.doctor_id });
 
-        // Cleanup: Remove from slot templates
-        const safeName = doctorName.replace(/\./g, '');
-        const slots = await Slot.find({
-            $or: [
-                { [`days_by_doctor.${safeName}`]: { $exists: true } },
-                { [`days_by_doctor.${doctorName}`]: { $exists: true } }
-            ]
-        });
-        for (const slot of slots) {
-            slot.days_by_doctor.delete(safeName);
-            slot.days_by_doctor.delete(doctorName);
-            await slot.save();
-        }
 
         await audit({
             event_type: 'DOCTOR_DELETED',
@@ -325,77 +249,84 @@ exports.deleteDoctor = async (req, res) => {
     }
 };
 
-// GET /api/doctors/:doctor_id/schedule
-exports.getDoctorSchedule = async (req, res) => {
+// GET /api/doctors/:doctor_id/history
+exports.getDoctorHistory = async (req, res) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
-        if (!ensureDoctorMatches(req, res, req.params.doctor_id, 'You can only view your own schedule')) return;
 
-        const doctor = await Doctor.findOne({ doctor_id: req.params.doctor_id });
+        const { doctor_id } = req.params;
+        const { days = 60 } = req.query;
+
+        const doctor = await Doctor.findOne({ doctor_id });
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
 
-        // Build schedule from slot templates (days_by_doctor map)
-        const safeName = doctor.name.replace(/\./g, '');
-        const allSlots = await Slot.find({ is_active: true }).sort({ sort_order: 1, start_time: 1 });
+        const since = new Date();
+        since.setDate(since.getDate() - parseInt(days));
+        since.setHours(0, 0, 0, 0);
 
-        const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const schedule = {};
-        days.forEach(d => schedule[d] = []);
-
-        for (const slot of allSlots) {
-            const doctorDays = slot.days_by_doctor?.get(safeName) || slot.days_by_doctor?.get(doctor.name) || [];
-            doctorDays.forEach(dayIndex => {
-                if (dayIndex >= 0 && dayIndex <= 6) {
-                    schedule[days[dayIndex]].push({
-                        slot_id: slot.slot_id,
-                        label: slot.slot_label,
-                        start: slot.start_time,
-                        end: slot.end_time,
-                        session: slot.session
-                    });
+        const pipeline = [
+            {
+                $match: {
+                    doctor_id,
+                    appointment_date: { $gte: since },
+                    is_deleted: { $ne: true }
                 }
-            });
-        }
+            },
+            {
+                $group: {
+                    _id: '$appointment_date',
+                    total_tokens: { $sum: 1 },
+                    completed: { $sum: { $cond: [{ $in: ['$status', ['COMPLETED', 'completed']] }, 1, 0] } },
+                    attended: { $sum: { $cond: [{ $in: ['$status', ['COMPLETED', 'completed', 'CONFIRMED', 'booked', 'BOOKED']] }, 1, 0] } },
+                    no_show: { $sum: { $cond: [{ $eq: ['$token_status', 'NO_SHOW'] }, 1, 0] } },
+                    cancelled: { $sum: { $cond: [{ $in: ['$status', ['CANCELLED', 'cancelled']] }, 1, 0] } },
+                    online_tokens: { $sum: { $cond: [{ $eq: ['$token_pool', 'ONLINE'] }, 1, 0] } },
+                    walkin_tokens: { $sum: { $cond: [{ $eq: ['$token_pool', 'WALK_IN'] }, 1, 0] } },
+                    start_time: { $min: '$appointment_time' },
+                    max_token: { $max: '$token_number' }
+                }
+            },
+            { $sort: { _id: -1 } }
+        ];
+
+        const rows = await Appointment.aggregate(pipeline);
+
+        const history = rows.map(r => {
+            const completion_rate = r.total_tokens > 0
+                ? Math.round((r.attended / r.total_tokens) * 100)
+                : 0;
+            return {
+                date: r._id,
+                day: new Date(r._id).toLocaleDateString('en-US', { weekday: 'long' }),
+                total_tokens: r.total_tokens,
+                completed: r.completed,
+                attended: r.attended,
+                no_show: r.no_show,
+                cancelled: r.cancelled,
+                online_tokens: r.online_tokens,
+                walkin_tokens: r.walkin_tokens,
+                start_time: r.start_time || '--',
+                max_token: r.max_token,
+                completion_rate
+            };
+        });
+
+        const totalDays = history.length;
+        const avgPatients = totalDays > 0
+            ? Math.round(history.reduce((s, d) => s + d.total_tokens, 0) / totalDays)
+            : 0;
+        const bestDay = history.reduce((b, d) => (!b || d.total_tokens > b.total_tokens) ? d : b, null);
 
         res.json({
             success: true,
-            data: {
-                doctor_id: doctor.doctor_id,
-                name: doctor.name,
-                availability: doctor.availability || schedule
-            }
+            doctor_name: doctor.name,
+            summary: {
+                total_days: totalDays,
+                avg_patients_per_day: avgPatients,
+                best_day: bestDay ? { date: bestDay.date, total_tokens: bestDay.total_tokens } : null
+            },
+            history
         });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-};
-
-// PATCH /api/doctors/:doctor_id/schedule
-exports.updateDoctorSchedule = async (req, res) => {
-    try {
-        if (!ensureDoctorSessionHasProfile(req, res)) return;
-        if (!ensureDoctorMatches(req, res, req.params.doctor_id, 'You can only update your own schedule')) return;
-
-        const { availability } = req.body || {};
-        if (!availability) {
-            return res.status(400).json({ success: false, message: 'availability is required' });
-        }
-
-        const doctor = await Doctor.findOne({ doctor_id: req.params.doctor_id });
-        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
-
-        await Doctor.updateOne({ doctor_id: req.params.doctor_id }, { $set: { availability } });
-
-        await audit({
-            event_type: 'DOCTOR_SCHEDULE_UPDATED',
-            entity_type: 'doctor',
-            entity_id: req.params.doctor_id,
-            actor: req.user?.username || 'ADMIN',
-            actor_type: 'ADMIN',
-            new_value: { availability }
-        });
-
-        res.json({ success: true, message: 'Schedule updated successfully' });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

@@ -51,12 +51,25 @@ const DoctorSchema = new mongoose.Schema({
         type: Boolean,
         default: true
     },
-    // Weekly availability template for this specific doctor
-    // { "0": ["S1", "S2"], "1": ["S1"] } where "0" is Sunday and "S1" is slot_id
-    available_slots: {
-        type: Map,
-        of: [String],
-        default: {}
+    daily_token_limit: {
+        type: Number,
+        default: 40
+    },
+    online_token_limit: {
+        type: Number,
+        default: 20
+    },
+    walkin_token_limit: {
+        type: Number,
+        default: 20
+    },
+    avg_consultation_time: {
+        type: Number,
+        default: 10 // Minutes
+    },
+    consultation_count: {
+        type: Number,
+        default: 0
     },
     created_at: {
         type: Date,

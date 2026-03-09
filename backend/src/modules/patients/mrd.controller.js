@@ -1,12 +1,15 @@
 const MRD = require('../../models/MRD');
 const Appointment = require('../../models/Appointment');
 const Patient = require('../../models/Patient');
+const PrescriptionDeliveryLog = require('../../models/PrescriptionDeliveryLog');
 const audit = require('../../utils/audit');
 const {
     getDoctorIdFromSession,
     ensureDoctorSessionHasProfile,
     ensureDoctorMatches
 } = require('../../utils/doctorScope');
+
+const { queueMessage } = require('../../services/messageQueueService');
 
 const ensureDoctorCanAccessPatient = async (req, res, patientId, message = 'Access denied for this patient profile') => {
     // Doctors can now access any patient MRD. Scoping is removed for viewing.
@@ -114,7 +117,7 @@ exports.getMRDByPatientId = async (req, res) => {
             }
         });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -231,7 +234,7 @@ exports.addMRDEntry = async (req, res) => {
 
         res.json({ success: true, data: mrd });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -255,7 +258,7 @@ exports.getEntryByAppointment = async (req, res) => {
         const entry = mrd.entries.find(e => e.appointment_id === appointment_id);
         res.json({ success: true, data: entry, patient_id: mrd.patient_id });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -304,7 +307,7 @@ exports.updateMRDEntry = async (req, res) => {
 
         res.json({ success: true, data: entry });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -350,7 +353,7 @@ exports.exportMRD = async (req, res) => {
             }
         });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -418,7 +421,7 @@ exports.addVaccinationRecord = async (req, res) => {
 
         res.status(201).json({ success: true, message: 'Vaccination record added' });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -447,7 +450,7 @@ exports.lockMRDEntry = async (req, res) => {
 
         res.json({ success: true, message: 'Entry locked successfully' });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -496,6 +499,62 @@ exports.uploadMRDAttachment = async (req, res) => {
         await mrd.save();
         res.json({ success: true, message: 'Attachments uploaded successfully', data: entry.attachments });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
+    }
+};
+
+// @desc    Send prescription via WhatsApp
+// @route   POST /api/mrd/entry/:id/send-whatsapp
+exports.sendPrescriptionViaWhatsApp = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const mrd = await MRD.findOne({ 'entries._id': id });
+        if (!mrd) return res.status(404).json({ success: false, message: 'Entry not found' });
+
+        const entry = mrd.entries.id(id);
+        const patient = await Patient.findOne({ patient_id: mrd.patient_id }).lean();
+
+        if (!patient || !patient.wa_id) {
+            return res.status(400).json({ success: false, message: 'Patient or WhatsApp ID not found' });
+        }
+
+        if (!entry.prescription && !entry.advice) {
+            return res.status(400).json({ success: false, message: 'No prescription or advice found to send' });
+        }
+
+        // Format prescription for message
+        const prescriptionText = entry.prescription ? `*Prescription:*\n${entry.prescription}` : '';
+        const adviceText = entry.advice ? `*Advice:*\n${entry.advice}` : '';
+        const visitDate = new Date(entry.visit_date).toLocaleDateString();
+
+        const fullMessage = `Hi ${patient.parent_name || 'Parent'},\nPrescription for *${patient.child_name}* (Visit: ${visitDate}):\n\n${prescriptionText}\n\n${adviceText}\n\nRegards,\nDr. Indu's Child Care`;
+
+        await queueMessage(patient.wa_id, 'PRESCRIPTION_DELIVERY', {
+            parent_name: patient.parent_name || 'Parent',
+            child_name: patient.child_name,
+            date: visitDate,
+            message_custom: fullMessage
+        });
+
+        await audit({
+            event_type: 'PRESCRIPTION_SENT_WA',
+            entity_type: 'mrd',
+            entity_id: mrd.patient_id,
+            actor: req.user?.username || 'SYSTEM',
+            actor_type: req.user ? req.user.role : 'SYSTEM'
+        });
+
+        await PrescriptionDeliveryLog.create({
+            prescription_id: entry._id,
+            patient_id: mrd.patient_id,
+            sent_by: req.user?.username || 'SYSTEM',
+            sent_at: new Date(),
+            delivery_status: 'sent',
+            whatsapp_number: patient.wa_id
+        });
+
+        res.json({ success: true, message: 'Prescription delivery queued via WhatsApp' });
+    } catch (err) {
+        next(err);
     }
 };

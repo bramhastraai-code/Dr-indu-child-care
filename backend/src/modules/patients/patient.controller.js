@@ -3,33 +3,75 @@ const MRD = require('../../models/MRD');
 const BotSession = require('../../models/BotSession');
 const Appointment = require('../../models/Appointment');
 const audit = require('../../utils/audit');
-const { normalizePhone, normalizeWaId } = require('../../utils/helpers');
+const { normalizePhone, normalizeWaId, normalizeGender } = require('../../utils/helpers');
 const { hashField, decrypt } = require('../../utils/encryption');
 const {
     getDoctorIdFromSession,
     ensureDoctorSessionHasProfile
 } = require('../../utils/doctorScope');
+const { generatePatientKey } = require('../../utils/patientKey');
 
-// Helper: parse DD/MM/YYYY or YYYY-MM-DD → Date
+// Helper: parse DD/MM/YYYY or YYYY-MM-DD to Date
 const parseDOB = (raw) => {
     if (!raw) return null;
     if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
         const [d, m, y] = raw.split('/');
-        return new Date(`${y}-${m}-${d}`);
+        const parsed = new Date(`${y}-${m}-${d}`);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
     }
-    return new Date(raw);
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
+// Helper: generate next patient_id  e.g. 26-AA1
+const generatePatientId = async (firstName, lastName, childName) => {
+    const year = new Date().getFullYear().toString().slice(-2);
 
-// Helper: generate next patient_id  e.g. DICC-2026-0001
-const generatePatientId = async () => {
-    const year = new Date().getFullYear();
-    const prefix = `DICC-${year}-`;
-    const last = await Patient.findOne({ patient_id: { $regex: `^${prefix}` } })
-        .sort({ patient_id: -1 });
-    const seq = last
-        ? parseInt(last.patient_id.replace(prefix, ''), 10) + 1
-        : 1;
-    return `${prefix}${seq.toString().padStart(4, '0')}`;
+    let fInitial = 'A';
+    let lInitial = 'A';
+
+    // 1. Try to get initials from firstName/lastName
+    if (firstName && firstName.trim()) {
+        fInitial = firstName.trim().charAt(0).toUpperCase();
+    }
+    if (lastName && lastName.trim()) {
+        lInitial = lastName.trim().charAt(0).toUpperCase();
+    } else if (childName && childName.trim()) {
+        // 2. Fallback to childName if lastName is missing
+        const parts = childName.trim().split(/\s+/);
+        if (parts.length >= 1 && (!firstName || !firstName.trim())) {
+            fInitial = parts[0].charAt(0).toUpperCase();
+        }
+        if (parts.length >= 2) {
+            lInitial = parts[parts.length - 1].charAt(0).toUpperCase();
+        } else if (parts.length === 1 && (!lastName || !lastName.trim())) {
+            // Use second letter or repeat first if only one word
+            lInitial = parts[0].length > 1 ? parts[0].charAt(1).toUpperCase() : parts[0].charAt(0).toUpperCase();
+        }
+    }
+
+    const initials = `${fInitial}${lInitial}`;
+    const prefix = `${year}-${initials}`;
+
+    // 3. Find all existing patients with this prefix to get the max sequence
+    // We fetch all to avoid string sorting issues (e.g., "9" > "10" in some cases)
+    const existingPatients = await Patient.find({
+        patient_id: { $regex: `^${prefix}\\d+$` }
+    }).select('patient_id').lean();
+
+    let maxSeq = 0;
+    existingPatients.forEach(p => {
+        const seqPart = p.patient_id.slice(prefix.length);
+        const seqNum = parseInt(seqPart, 10);
+        if (!isNaN(seqNum) && seqNum > maxSeq) {
+            maxSeq = seqNum;
+        }
+    });
+
+    const nextSeq = maxSeq + 1;
+    // No left padding (e.g., 1, 10, 100)
+    const seqStr = `${nextSeq}`;
+
+    return `${prefix}${seqStr}`;
 };
 
 const getScopedPatientIdFilter = async (req) => {
@@ -45,7 +87,7 @@ const ensureDoctorCanAccessPatient = async (req, res, patientId, message = 'Acce
 // @desc    Register a new patient
 // @route   POST /api/patients
 // @access  Public / Private
-exports.registerPatient = async (req, res) => {
+exports.registerPatient = async (req, res, next) => {
     try {
         const {
             // Core
@@ -67,9 +109,6 @@ exports.registerPatient = async (req, res) => {
             age_years,
             age_months,
             age_days,
-            birth_time_hours,
-            birth_time_minutes,
-            birth_time_ampm,
 
             // Section 2 – Photo & ID
             registration_date,
@@ -78,11 +117,9 @@ exports.registerPatient = async (req, res) => {
 
             // Section 3 – Parent / Guardian
             father_name,
-            father_mobile,
             father_email,
             father_occupation,
             mother_name,
-            mother_mobile,
             mother_email,
             mother_occupation,
             parent_mobile,              // user request
@@ -90,19 +127,10 @@ exports.registerPatient = async (req, res) => {
 
             // Section 4 – Contact
             email,
-            area,
-            city,
-            state,
-            country,
-            pin_code,
-            phone_residence,
-            primary_address,
-            address,
 
             // Section 5 – Additional
             source,
-            reference_details,
-            ref_details,
+            referred_by,
             home_branch,
             doctor,
             religion,
@@ -126,16 +154,40 @@ exports.registerPatient = async (req, res) => {
             final_child_name = [first_name, middle_name, last_name].filter(Boolean).join(' ');
         }
         if (!final_child_name) {
-            return res.status(400).json({ success: false, message: 'Child name or First name is required' });
+            return res.status(400).json({ success: false, message: 'First and Last name are required' });
         }
 
         // 2. Resolve WhatsApp ID / Mobile
-        const raw_wa_id = wa_id || parent_mobile || mobile || father_mobile || mother_mobile;
+        const raw_wa_id = wa_id || parent_mobile || mobile;
         if (!raw_wa_id) {
-            return res.status(400).json({ success: false, message: 'At least one mobile number is required' });
+            return res.status(400).json({ success: false, message: 'Unique mobile number is required' });
         }
+
+
+        // Email is required and must be unique
+        if (!email || !email.trim()) {
+            return res.status(400).json({ success: false, message: 'Email Address is required' });
+        }
+        const email_hash = hashField(email.trim().toLowerCase());
+        const existingEmail = await Patient.findOne({ email_hash, is_deleted: false });
+        if (existingEmail) {
+            return res.status(400).json({
+                success: false,
+                message: 'This email address is already registered with another patient'
+            });
+        }
+
         const final_wa_id = normalizeWaId(raw_wa_id);
         const wa_hash = hashField(normalizePhone(raw_wa_id));
+        const normalizedGender = normalizeGender(gender);
+        const parsedDob = parseDOB(dob);
+
+        if (!parsedDob) {
+            return res.status(400).json({
+                success: false,
+                message: 'Date of Birth is required and must be a valid date'
+            });
+        }
 
         // Check duplicate by wa_hash AND child_name (siblings share wa_id)
         const existing = await Patient.findOne({
@@ -152,10 +204,14 @@ exports.registerPatient = async (req, res) => {
             });
         }
 
-        const patient_id = await generatePatientId();
+        const patient_id = await generatePatientId(first_name, last_name, final_child_name);
+        const patient_uid = patient_id; // Mapping patient_id to patient_uid as per spec format
+        const patient_key = await generatePatientKey(first_name, last_name, final_child_name);
 
         const patient = await Patient.create({
             patient_id,
+            patient_uid,
+            patient_key,
             wa_id: final_wa_id,
             wa_hash,
 
@@ -165,34 +221,28 @@ exports.registerPatient = async (req, res) => {
             first_name: first_name || null,
             middle_name: middle_name || null,
             last_name: last_name || null,
-            gender: gender || null,
+            gender: normalizedGender,
             mothers_name: mothers_name || mother_name || null,
             parent_name: parent_name || null,
 
             // Birth
             dob_unknown: dob_unknown || false,
-            dob: parseDOB(dob),
+            dob: parsedDob,
             age_years: age_years ?? null,
             age_months: age_months ?? null,
             age_days: age_days ?? null,
-            birth_time_hours: birth_time_hours ?? null,
-            birth_time_minutes: birth_time_minutes ?? null,
-            birth_time_ampm: birth_time_ampm || null,
 
             // Photo & ID
             registration_date: registration_date ? new Date(registration_date) : new Date(),
-            photo: photo || patient_photo || null,
             patient_photo: patient_photo || photo || null,
 
             // Father
             father_name: father_name || null,
-            father_mobile: father_mobile || null,
             father_email: father_email || null,
             father_occupation: father_occupation || null,
 
             // Mother
             mother_name: mother_name || mothers_name || null,
-            mother_mobile: mother_mobile || null,
             mother_email: mother_email || null,
             mother_occupation: mother_occupation || null,
 
@@ -200,19 +250,10 @@ exports.registerPatient = async (req, res) => {
 
             // Contact
             email: email || null,
-            area: area || null,
-            city: city || null,
-            state: state || null,
-            country: country || null,
-            pin_code: pin_code || null,
-            phone_residence: phone_residence || null,
-            primary_address: primary_address || address || null,
-            address: address || primary_address || null,
 
             // Additional
             source: source || null,
-            reference_details: reference_details || ref_details || null,
-            ref_details: ref_details || reference_details || null,
+            referred_by: referred_by || null,
             home_branch: home_branch || null,
             doctor: doctor || null,
             religion: religion || null,
@@ -220,7 +261,6 @@ exports.registerPatient = async (req, res) => {
             account_type: account_type || null,
             rating: rating || null,
             remarks: remarks || remark || null,
-            remark: remark || remarks || null,
 
             // Enrollment & Status
             enrollment_option: enrollment_option || 'just_enroll',
@@ -254,37 +294,93 @@ exports.registerPatient = async (req, res) => {
         res.status(201).json({ success: true, data: patient });
 
     } catch (err) {
-        res.status(500).json({ success: false, error_code: 'SERVER_ERROR', message: err.message });
+        next(err);
     }
 };
 
 // @desc    Register a new patient from whatsapp
-exports.registerFromWhatsapp = async (req, res) => {
+exports.registerFromWhatsapp = async (req, res, next) => {
     if (!req.body) req.body = {};
     req.body.registration_source = 'whatsapp';
-    return exports.registerPatient(req, res);
+    return exports.registerPatient(req, res, next);
 };
 
 // @desc    Register a new patient from form
-exports.registerFromForm = async (req, res) => {
+exports.registerFromForm = async (req, res, next) => {
     if (!req.body) req.body = {};
     req.body.registration_source = 'form';
-    return exports.registerPatient(req, res);
+    return exports.registerPatient(req, res, next);
+};
+
+const buildWaHashCandidates = (rawWaId) => {
+    const raw = String(rawWaId || '').trim();
+    const normalized = normalizeWaId(raw);
+    const normalizedPhone = normalizePhone(raw);
+    const withoutPlus = raw.replace(/^\+/, '');
+
+    return [...new Set(
+        [normalizedPhone, normalized, raw, withoutPlus]
+            .filter(Boolean)
+            .map(hashField)
+    )];
+};
+
+const findLegacyPatientByPhone = async (normalizedPhone) => {
+    if (!normalizedPhone) return null;
+
+    const cursor = Patient.find({
+        is_deleted: false,
+        $or: [
+            { wa_hash: { $exists: false } },
+            { wa_hash: null },
+            { wa_hash: '' }
+        ]
+    }).select('_id patient_id wa_id wa_hash').cursor();
+
+    try {
+        for await (const candidate of cursor) {
+            const storedWaId = candidate.get('wa_id', null, { getters: false });
+            const candidatePhone = normalizePhone(decrypt(storedWaId));
+            if (candidatePhone === normalizedPhone) {
+                return candidate;
+            }
+        }
+    } finally {
+        await cursor.close();
+    }
+
+    return null;
 };
 
 // @desc    Lookup patient by wa_id
-exports.getPatientByWaId = async (req, res) => {
+exports.getPatientByWaId = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
-        const raw = req.params.mobile || req.params.wa_id;
+        const raw = req.params.mobile || req.params.wa_id || '';
         const normalized = normalizeWaId(raw);
-        const wa_hash = hashField(normalizePhone(raw));
+        const normalizedPhone = normalizePhone(raw);
+        const waHashCandidates = buildWaHashCandidates(raw);
 
-        const patient = await Patient.findOne({
-            wa_hash,
-            is_deleted: false
-        });
+        let patient = null;
+        if (waHashCandidates.length) {
+            patient = await Patient.findOne({
+                wa_hash: { $in: waHashCandidates },
+                is_deleted: false
+            });
+        }
+
+        if (!patient) {
+            patient = await findLegacyPatientByPhone(normalizedPhone);
+            if (patient && normalizedPhone && !patient.wa_hash) {
+                const currentHash = hashField(normalizedPhone);
+                patient.wa_hash = currentHash;
+                await Patient.updateOne(
+                    { _id: patient._id },
+                    { $set: { wa_hash: currentHash } }
+                );
+            }
+        }
 
         if (!patient) {
             return res.json({
@@ -310,12 +406,43 @@ exports.getPatientByWaId = async (req, res) => {
             }
         });
     } catch (err) {
-        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+        next(err);
     }
 };
 
+// @desc    Lookup patient by email
+exports.getPatientByEmail = async (req, res, next) => {
+    try {
+        const email = req.params.email || '';
+        if (!email) {
+            return res.status(400).json({ success: false, message: 'Email is required' });
+        }
+
+        const email_hash = hashField(email.trim().toLowerCase());
+        const patient = await Patient.findOne({
+            email_hash,
+            is_deleted: false
+        });
+
+        if (!patient) {
+            return res.json({
+                success: true,
+                is_registered: false,
+                message: 'Patient not registered with this email'
+            });
+        }
+
+        res.json({
+            success: true,
+            is_registered: true,
+            data: patient
+        });
+    } catch (err) {
+        next(err);
+    }
+};
 // @desc    Get patient by patient_id
-exports.getPatientById = async (req, res) => {
+exports.getPatientById = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -342,16 +469,16 @@ exports.getPatientById = async (req, res) => {
             }
         });
     } catch (err) {
-        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+        next(err);
     }
 };
 
 // @desc    Get all patients
-exports.getPatients = async (req, res) => {
+exports.getPatients = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
-        let { page = 1, limit = 20, search, source, status, gender, city, doctor } = req.query;
+        let { page = 1, limit = 20, search, source, status, gender, doctor } = req.query;
         page = parseInt(page, 10);
         limit = parseInt(limit, 10);
         const skip = (page - 1) * limit;
@@ -360,8 +487,10 @@ exports.getPatients = async (req, res) => {
         const scopedPatientIdFilter = await getScopedPatientIdFilter(req);
         if (scopedPatientIdFilter) query.patient_id = scopedPatientIdFilter;
 
-        if (gender) query.gender = gender;
-        if (city) query.city = new RegExp(city, 'i');
+        if (gender) {
+            const normalizedFilterGender = normalizeGender(gender);
+            query.gender = normalizedFilterGender || gender;
+        }
         if (doctor) query.doctor = new RegExp(doctor, 'i');
 
         if (search) {
@@ -375,6 +504,7 @@ exports.getPatients = async (req, res) => {
                 { father_name: regex },
                 { mother_name: regex },
                 { patient_id: regex },
+                { patient_key: regex },
                 { wa_hash: searchHash }
             ];
         }
@@ -398,12 +528,12 @@ exports.getPatients = async (req, res) => {
             data: patients
         });
     } catch (err) {
-        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+        next(err);
     }
 };
 
 // @desc    Update patient details
-exports.updatePatient = async (req, res) => {
+exports.updatePatient = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -411,6 +541,17 @@ exports.updatePatient = async (req, res) => {
         const updates = req.body || {};
         const actor = req.user ? req.user.username : 'ADMIN';
         if (!await ensureDoctorCanAccessPatient(req, res, patient_id, 'You can only update patients linked to your profile')) return;
+
+        if (Object.prototype.hasOwnProperty.call(updates, 'gender')) {
+            const normalizedUpdateGender = normalizeGender(updates.gender);
+            if (!normalizedUpdateGender && updates.gender !== null && updates.gender !== '') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Gender must be boy or girl'
+                });
+            }
+            updates.gender = normalizedUpdateGender;
+        }
 
         // Protect immutable fields
         delete updates.patient_id;
@@ -442,13 +583,13 @@ exports.updatePatient = async (req, res) => {
 
         res.json({ success: true, message: 'Patient updated successfully', data: patient });
     } catch (err) {
-        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+        next(err);
     }
 };
 
 // @desc    Soft delete patient
 // @route   DELETE /api/patients/:patient_id
-exports.deletePatient = async (req, res) => {
+exports.deletePatient = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -476,13 +617,13 @@ exports.deletePatient = async (req, res) => {
 
         res.json({ success: true, message: 'Patient deleted successfully' });
     } catch (err) {
-        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+        next(err);
     }
 };
 
 // @desc    Upload patient photo (Base64 or multipart)
 // @route   PATCH /api/patients/:patient_id/photo
-exports.uploadPatientPhoto = async (req, res) => {
+exports.uploadPatientPhoto = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -498,7 +639,7 @@ exports.uploadPatientPhoto = async (req, res) => {
 
         const patient = await Patient.findOneAndUpdate(
             { patient_id, is_deleted: false },
-            { $set: { photo: photoData, patient_photo: photoData, last_updated_at: new Date() } },
+            { $set: { patient_photo: photoData, last_updated_at: new Date() } },
             { new: true }
         );
 
@@ -508,13 +649,13 @@ exports.uploadPatientPhoto = async (req, res) => {
 
         res.json({ success: true, message: 'Photo uploaded successfully', photo_url: photoData });
     } catch (err) {
-        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+        next(err);
     }
 };
 
 // @desc    Export patients to CSV
 // @route   GET /api/patients/export/csv
-exports.exportPatientsCsv = async (req, res) => {
+exports.exportPatientsCsv = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -523,8 +664,10 @@ exports.exportPatientsCsv = async (req, res) => {
         const filter = { is_deleted: false };
         const scopedPatientIdFilter = await getScopedPatientIdFilter(req);
         if (scopedPatientIdFilter) filter.patient_id = scopedPatientIdFilter;
-        if (city) filter.city = new RegExp(city, 'i');
-        if (gender) filter.gender = gender;
+        if (gender) {
+            const normalizedFilterGender = normalizeGender(gender);
+            filter.gender = normalizedFilterGender || gender;
+        }
         if (doctor) filter.doctor = new RegExp(doctor, 'i');
         if (date_from || date_to) {
             filter.registered_at = {};
@@ -535,7 +678,7 @@ exports.exportPatientsCsv = async (req, res) => {
         const patients = await Patient.find(filter).select('-password_hash -wa_hash -photo -patient_photo').lean();
 
         // Build CSV
-        const fields = ['patient_id', 'child_name', 'gender', 'dob', 'father_name', 'mother_name', 'area', 'city', 'state', 'email', 'doctor', 'registration_source', 'is_active', 'registered_at'];
+        const fields = ['patient_id', 'child_name', 'gender', 'dob', 'father_name', 'mother_name', 'email', 'doctor', 'registration_source', 'is_active', 'registered_at'];
         const header = fields.join(',');
         const rows = patients.map(p =>
             fields.map(f => {
@@ -550,13 +693,13 @@ exports.exportPatientsCsv = async (req, res) => {
         res.setHeader('Content-Disposition', 'attachment; filename="patients.csv"');
         res.send([header, ...rows].join('\n'));
     } catch (err) {
-        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+        next(err);
     }
 };
 
 // @desc    Patient statistics
 // @route   GET /api/patients/stats
-exports.getPatientStats = async (req, res) => {
+exports.getPatientStats = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -570,12 +713,11 @@ exports.getPatientStats = async (req, res) => {
             ? { is_deleted: false, patient_id: scopedPatientIdFilter }
             : { is_deleted: false };
 
-        const [total, active, inactive, byGender, byCity, byDoctor, bySources, newMonth, newWeek] = await Promise.all([
+        const [total, active, inactive, byGender, byDoctor, bySources, newMonth, newWeek] = await Promise.all([
             Patient.countDocuments(baseMatch),
             Patient.countDocuments({ ...baseMatch, is_active: true }),
             Patient.countDocuments({ ...baseMatch, is_active: false }),
             Patient.aggregate([{ $match: baseMatch }, { $group: { _id: '$gender', count: { $sum: 1 } } }]),
-            Patient.aggregate([{ $match: baseMatch }, { $group: { _id: '$city', count: { $sum: 1 } } }]),
             Patient.aggregate([{ $match: baseMatch }, { $group: { _id: '$doctor', count: { $sum: 1 } } }]),
             Patient.aggregate([{ $match: baseMatch }, { $group: { _id: '$registration_source', count: { $sum: 1 } } }]),
             Patient.countDocuments({ ...baseMatch, registered_at: { $gte: startOfMonth } }),
@@ -591,7 +733,6 @@ exports.getPatientStats = async (req, res) => {
                 active_patients: active,
                 inactive_patients: inactive,
                 by_gender: toObj(byGender),
-                by_city: toObj(byCity),
                 by_doctor: toObj(byDoctor),
                 registration_sources: toObj(bySources),
                 new_this_month: newMonth,
@@ -599,6 +740,8 @@ exports.getPatientStats = async (req, res) => {
             }
         });
     } catch (err) {
-        res.status(500).json({ success: false, error_code: 'INTERNAL_ERROR', message: err.message });
+        next(err);
     }
 };
+
+

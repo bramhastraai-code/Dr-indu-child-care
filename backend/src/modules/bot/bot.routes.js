@@ -30,8 +30,6 @@ const auth = require('../../middleware/auth');
 // ── Public Routes (No Auth) ──────────────────────────────────────────
 router.get('/doctors', getDoctorsMinimal);
 router.get('/doctor-availability/:doctor_id', getDoctorAvailabilityBot);
-router.get('/slots/available', getAvailableSlotsBot);
-router.get('/slots/available-dates', getAvailableDatesBot);
 router.get('/appointments/by-wa/:wa_id', getAppointmentsByWaBot);
 router.get('/appointments/token-status/:token', getTokenStatusBot);
 
@@ -45,7 +43,7 @@ router.get('/session/:wa_id/history', getSessionHistory);
 router.post('/chat/log', logChat);
 router.post('/chat/bot-reply', logBotReply);
 router.get('/chat/bot-replies/:wa_id', getBotReplies);
-router.get('/chat/history/:wa_id', getChatHistory);
+router.get('/chat/history', getChatHistory);
 
 // Simple Messages
 router.post('/messages', saveMessage);

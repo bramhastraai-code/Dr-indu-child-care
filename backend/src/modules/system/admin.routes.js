@@ -10,15 +10,15 @@ router.post('/login', login);
 router.post('/refresh-token', refreshToken);
 router.post('/logout', logout);
 
-// ── All Admin Routes (auth middleware allows public by default) ──────
-router.get('/profile', auth, authorize(['superadmin', 'admin', 'staff', 'secretary', 'doctor']), getProfile);
-router.patch('/profile', auth, authorize(['superadmin', 'admin', 'staff', 'secretary', 'doctor']), updateProfile);
+// ── All Admin Routes — now public
+router.get('/profile', getProfile);
+router.patch('/profile', updateProfile);
 
-router.get('/overview', auth, authorize(['superadmin', 'admin', 'doctor']), getSystemOverview);
-router.get('/roles', auth, authorize(['superadmin', 'admin', 'doctor']), getAvailableRoles);
-router.get('/users', auth, authorize(['superadmin', 'admin']), getAdmins);
-router.post('/users', auth, authorize(['superadmin']), createAdmin);
-router.patch('/users/:user_id', auth, authorize(['superadmin']), updateAdmin);
-router.delete('/users/:user_id', auth, authorize(['superadmin']), deleteAdmin);
+router.get('/overview', getSystemOverview);
+router.get('/roles', getAvailableRoles);
+router.get('/users', getAdmins);
+router.post('/users', createAdmin);
+router.patch('/users/:user_id', updateAdmin);
+router.delete('/users/:user_id', deleteAdmin);
 
 module.exports = router;

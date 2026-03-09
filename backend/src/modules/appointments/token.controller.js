@@ -1,6 +1,5 @@
 const Appointment = require('../../models/Appointment');
 const Patient = require('../../models/Patient');
-const Slot = require('../../models/Slot');
 const DoctorAvailability = require('../../models/DoctorAvailability');
 const Doctor = require('../../models/Doctor');
 const audit = require('../../utils/audit');
@@ -12,6 +11,35 @@ const {
     ensureDoctorSessionHasProfile,
     ensureDoctorMatches
 } = require('../../utils/doctorScope');
+const { getDoctorShiftConfig } = require('../../utils/tokenHelpers');
+
+// Helper: Update doctor consultation rolling average
+const updateDoctorConsultationStats = async (doctor_id, durationMinutes) => {
+    if (!durationMinutes || durationMinutes <= 0) return;
+
+    // Cap duration to reasonable limits (e.g., 2 mins min, 60 mins max) to avoid outliers
+    const cappedDuration = Math.max(2, Math.min(60, durationMinutes));
+
+    const doctor = await Doctor.findOne({ doctor_id });
+    if (!doctor) return;
+
+    const oldCount = doctor.consultation_count || 0;
+    const oldAvg = doctor.avg_consultation_time || 10;
+    const newCount = oldCount + 1;
+
+    // Rolling average formula
+    const newAvg = ((oldAvg * oldCount) + cappedDuration) / newCount;
+
+    await Doctor.updateOne(
+        { doctor_id },
+        {
+            $set: {
+                avg_consultation_time: Math.round(newAvg * 10) / 10,
+                consultation_count: newCount
+            }
+        }
+    );
+};
 
 // Helper: resolve doctor by ID or canonical name
 const resolveDoctor = async (doctor_id, doctor_name) => {
@@ -41,167 +69,11 @@ const getNextTokenNumberForDoctor = (doctor_id, date) => getNextTokenNumber(Appo
 exports.getNextTokenNumberForDoctor = getNextTokenNumberForDoctor;
 
 // ── POST /api/appointments/book-with-token ──────────────────────────
-// Legacy endpoint name kept for backward compatibility.
-// Token is now generated during 24h reminder processing, not at booking time.
+// Modern wrapper for createAppointment using token system
 exports.bookWithToken = async (req, res) => {
-    let slotReservation = null;
-    let appointmentPersisted = false;
-    try {
-        if (!ensureDoctorSessionHasProfile(req, res)) return;
-
-        const {
-            patient_id, wa_id, mobile,
-            doctor_id, doctor_name,
-            appointment_date, slot_id,
-            visit_type, reason,
-            booking_source = 'dashboard'
-        } = req.body || {};
-
-        const { doctor_id: scopedDoctorId, doctor_name: scopedDoctorName } = resolveScopedDoctorInput(req, doctor_id, doctor_name);
-
-        if (!appointment_date || !slot_id || (!scopedDoctorId && !scopedDoctorName)) {
-            return res.status(400).json({ success: false, message: 'appointment_date, slot_id, and doctor_id/doctor_name are required' });
-        }
-
-        // Resolve patient
-        let patient;
-        if (patient_id) {
-            patient = await Patient.findOne({ patient_id, is_deleted: false });
-        } else if (wa_id || mobile) {
-            const raw = wa_id || mobile;
-            const wa_hash = hashField(normalizePhone(raw));
-            patient = await Patient.findOne({ wa_hash, is_deleted: false });
-        }
-        if (!patient) return res.status(404).json({ success: false, message: 'Patient not found' });
-
-        // Resolve doctor
-        const doctor = await resolveDoctor(scopedDoctorId, scopedDoctorName);
-        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
-
-        const queryDate = toMidnight(appointment_date);
-        const slot = await Slot.findOne({ slot_id });
-        if (!slot) return res.status(404).json({ success: false, message: 'Slot not found' });
-
-        // Check if slot is taken
-        const SlotAvailability = require('../../models/SlotAvailability');
-        const slotTaken = await SlotAvailability.findOne({
-            slot_id,
-            slot_date: queryDate,
-            doctor_name: doctor.name,
-            $or: [{ is_booked: true }, { blocked_by_admin: true }]
-        });
-        if (slotTaken) {
-            return res.status(409).json({ success: false, message: 'This time slot is already booked or blocked for this doctor.' });
-        }
-
-        // Check duplicate appointment for patient today
-        const existing = await Appointment.findOne({
-            patient_id: patient.patient_id,
-            appointment_date: queryDate,
-            status: { $in: ['BOOKED', 'CONFIRMED'] }
-        });
-        if (existing) {
-            return res.status(409).json({
-                success: false,
-                message: `Patient already has appointment ${existing.appointment_id} today`
-            });
-        }
-
-        // Generate IDs
-        const appointment_id = await generateAppointmentId();
-
-        // 5. Reserve slot first (prevents appointment creation when slot lock fails)
-        const reservedSlot = await SlotAvailability.findOneAndUpdate(
-            {
-                slot_id,
-                slot_date: queryDate,
-                doctor_name: doctor.name,
-                is_booked: false,
-                blocked_by_admin: false
-            },
-            {
-                $set: {
-                    is_booked: true,
-                    appointment_id,
-                    doctor_name: doctor.name,
-                    doctor_id: doctor.doctor_id,
-                    last_updated_at: new Date()
-                }
-            },
-            { upsert: true, new: true }
-        );
-        if (!reservedSlot) {
-            return res.status(409).json({ success: false, message: 'Slot was just taken. Please choose another.' });
-        }
-        slotReservation = { appointment_id, slot_id, slot_date: queryDate, doctor_name: doctor.name };
-
-        await Appointment.create({
-            appointment_id,
-            patient_id: patient.patient_id,
-            doctor_id: doctor.doctor_id,
-            doctor_name: doctor.name,
-            doctor_speciality: doctor.speciality,
-            appointment_date: queryDate,
-            slot_id,
-            appointment_time: reservedSlot?.custom_start_time || slot.start_time,
-            visit_type: visit_type || 'CONSULTATION',
-            reason: reason || null,
-            status: 'CONFIRMED',
-            booking_source,
-            confirmation_sent: true,
-            created_at: new Date(),
-            last_updated_at: new Date(),
-            last_updated_by: req.user?.username || booking_source
-        });
-        appointmentPersisted = true;
-
-        // Ensure tokens are assigned
-        await assignTokensForDate(queryDate);
-
-        await audit({
-            event_type: 'APPOINTMENT_BOOKED_WITH_TOKEN',
-            entity_type: 'appointment',
-            entity_id: appointment_id,
-            actor: req.user?.username || booking_source,
-            actor_type: 'ADMIN',
-            new_value: { patient_id: patient.patient_id, doctor_id: doctor.doctor_id, token_generation_status: 'PENDING_24H_REMINDER' }
-        });
-
-        res.status(201).json({
-            success: true,
-            data: {
-                appointment_id,
-                token_number: null,
-                token_status: null,
-                token_generation_status: 'PENDING_24H_REMINDER',
-                patient_id: patient.patient_id,
-                child_name: patient.child_name,
-                doctor_name: doctor.name,
-                doctor_id: doctor.doctor_id,
-                appointment_date: queryDate,
-                appointment_time: slot.start_time
-            }
-        });
-    } catch (err) {
-        if (slotReservation && !appointmentPersisted) {
-            try {
-                const SlotAvailability = require('../../models/SlotAvailability');
-                await SlotAvailability.updateOne(
-                    {
-                        slot_id: slotReservation.slot_id,
-                        slot_date: slotReservation.slot_date,
-                        doctor_name: slotReservation.doctor_name,
-                        appointment_id: slotReservation.appointment_id
-                    },
-                    { $set: { is_booked: false, appointment_id: null, last_updated_at: new Date() } }
-                );
-            } catch (rollbackErr) {
-                console.error('[bookWithToken][rollback]', rollbackErr.message);
-            }
-        }
-        if (err.code === 11000) return res.status(409).json({ success: false, message: 'Concurrent booking detected. Please choose another slot.' });
-        res.status(500).json({ success: false, error: err.message });
-    }
+    // Re-route to createAppointment logic or just tell them to use that
+    const { createAppointment } = require('./appointment.controller');
+    return createAppointment(req, res);
 };
 
 // ── POST /api/appointments/token/:token/check-in ────────────────────
@@ -232,7 +104,7 @@ exports.checkIn = async (req, res) => {
 
         res.json({ success: true, message: `Token ${token} checked in`, data: appt });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -275,9 +147,10 @@ exports.getDailyTokens = async (req, res) => {
             patient_id: a.patient_id,
             child_name: patientMap[a.patient_id] || null,
             token: a.token_number,
+            token_display: a.token_display,
             token_number: a.token_number,
+            token_pool: a.token_pool,
             status: a.token_status,
-            slot_id: a.slot_id,
             appointment_id: a.appointment_id,
             doctor_name: a.doctor_name,
             doctor_id: a.doctor_id
@@ -290,7 +163,7 @@ exports.getDailyTokens = async (req, res) => {
             data: enriched
         });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -354,7 +227,7 @@ exports.getClinicDisplay = async (req, res) => {
             display
         });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -368,10 +241,21 @@ exports.getNextToken = async (req, res) => {
         const queryDate = toMidnight(new Date());
 
         // Complete current in-progress
-        await Appointment.updateMany(
-            { doctor_id, appointment_date: queryDate, token_status: 'IN_PROGRESS' },
-            { $set: { token_status: 'COMPLETED', status: 'COMPLETED', last_updated_at: new Date() } }
-        );
+        const currentInProgress = await Appointment.findOne({ doctor_id, appointment_date: queryDate, token_status: 'IN_PROGRESS' });
+        if (currentInProgress) {
+            const now = new Date();
+            const calledAt = currentInProgress.called_at || currentInProgress.last_updated_at;
+            const durationMs = now - (new Date(calledAt));
+            const durationMins = Math.round(durationMs / 60000);
+
+            await updateDoctorConsultationStats(doctor_id, durationMins);
+
+            currentInProgress.token_status = 'COMPLETED';
+            currentInProgress.status = 'COMPLETED';
+            currentInProgress.checked_out_at = now;
+            currentInProgress.last_updated_at = now;
+            await currentInProgress.save();
+        }
 
         // Find next patient: Prioritize CHECKED_IN over WAITING, then by check_in_time or token_number
         // Prefer CHECKED_IN over WAITING.
@@ -413,7 +297,7 @@ exports.getNextToken = async (req, res) => {
             message: nextPatient ? `Now serving token ${nextPatient.token_number}` : 'No more patients in queue'
         });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -446,7 +330,8 @@ exports.updateTokenStatus = async (req, res) => {
         if (status === 'IN_PROGRESS') updateFields.called_at = new Date();
         if (status === 'COMPLETED') {
             updateFields.status = 'COMPLETED';
-            updateFields.completed_at = new Date();
+            updateFields.checked_out_at = new Date();
+            updateFields.completed_at = new Date(); // keeping for compatibility if used
         }
         if (status === 'NO_SHOW') {
             updateFields.status = 'NO_SHOW';
@@ -455,6 +340,14 @@ exports.updateTokenStatus = async (req, res) => {
 
         const appt = await Appointment.findOneAndUpdate(filter, { $set: updateFields }, { new: true });
         if (!appt) return res.status(404).json({ success: false, message: `Token ${token} not found` });
+
+        // Update stats if completed
+        if (status === 'COMPLETED' && appt.called_at) {
+            const now = new Date();
+            const calledAt = new Date(appt.called_at);
+            const durationMins = Math.round((now - calledAt) / 60000);
+            await updateDoctorConsultationStats(effectiveDoctorId, durationMins);
+        }
 
         // Sync current_token in availability
         if (status === 'IN_PROGRESS' && appt.doctor_id) {
@@ -466,7 +359,7 @@ exports.updateTokenStatus = async (req, res) => {
 
         res.json({ success: true, data: appt });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -521,12 +414,12 @@ exports.getTokenStatus = async (req, res) => {
             }
         });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
 // ── POST /api/appointments/auto-reschedule ───────────────────────────
-// Auto-reschedule NO_SHOW or same-day cancelled appointments to next available slot
+// Auto-reschedule NO_SHOW or same-day cancelled appointments to next available token
 exports.autoReschedule = async (req, res) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
@@ -543,57 +436,41 @@ exports.autoReschedule = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Only NO_SHOW or CANCELLED appointments can be auto-rescheduled' });
         }
 
-        // Find next available slot for same doctor
-        const SlotAvailability = require('../../models/SlotAvailability');
         const targetDate = toMidnight(target_date || (() => {
             const d = new Date(); d.setDate(d.getDate() + 1); return d;
         })());
 
-        const freeSlot = await SlotAvailability.findOne({
-            doctor_name: appt.doctor_name,
-            slot_date: targetDate,
-            is_booked: false,
-            blocked_by_admin: false
-        });
-
-        if (!freeSlot) {
-            return res.status(409).json({
-                success: false,
-                message: `No available slots for ${appt.doctor_name} on ${targetDate.toISOString().split('T')[0]}`
-            });
-        }
+        const shift = await getDoctorShiftConfig(appt.doctor_id, targetDate);
 
         // Generate new appointment ID
         const new_appointment_id = await generateAppointmentId();
 
-        const slotTemplate = await Slot.findOne({ slot_id: freeSlot.slot_id }).lean();
-
-        const newAppt = await Appointment.create({
+        const newApptData = {
             appointment_id: new_appointment_id,
             patient_id: appt.patient_id,
             doctor_id: appt.doctor_id,
             doctor_name: appt.doctor_name,
             doctor_speciality: appt.doctor_speciality,
             appointment_date: targetDate,
-            slot_id: freeSlot.slot_id,
-            appointment_time: freeSlot.custom_start_time || slotTemplate?.start_time || null,
+            appointment_time: shift.start_time,
             visit_type: appt.visit_type,
             reason: reason || `Auto-rescheduled from ${appointment_id} (${appt.status})`,
             status: 'CONFIRMED',
             booking_source: 'dashboard',
+            registration_type: appt.registration_type || 'online',
+            token_pool: appt.token_pool || 'ONLINE',
             token_number: null,
-            token_status: null,
+            token_status: 'PENDING',
             confirmation_sent: false,
             created_at: new Date(),
             last_updated_at: new Date(),
             last_updated_by: req.user?.username || 'SYSTEM'
-        });
+        };
 
-        // Mark the slot booked
-        await SlotAvailability.updateOne(
-            { slot_id: freeSlot.slot_id, slot_date: targetDate, doctor_name: appt.doctor_name },
-            { $set: { is_booked: true, appointment_id: new_appointment_id } }
-        );
+        const newAppt = await Appointment.create(newApptData);
+
+        // Immediately try to assign token if possible
+        await assignTokensForDate(targetDate);
 
         await audit({
             event_type: 'APPOINTMENT_AUTO_RESCHEDULED',
@@ -611,13 +488,11 @@ exports.autoReschedule = async (req, res) => {
                 original_appointment_id: appointment_id,
                 new_appointment_id,
                 new_date: targetDate,
-                token_number: null,
-                token_generation_status: 'PENDING_24H_REMINDER',
-                slot_id: freeSlot.slot_id
+                token_status: 'PENDING'
             }
         });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        next(err);
     }
 };
 
@@ -666,5 +541,135 @@ exports.clearQueue = async (req, res) => {
         res.json({ success: true, message: `Queue cleared for doctor ${doctor_id}. ${result.modifiedCount} appointments cancelled.` });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// ── POS /api/appointments/notify-delay ──────────────────────────────
+exports.notifyDelay = async (req, res) => {
+    try {
+        const { doctor_id, date, delay_minutes } = req.body || {};
+        const queryDate = toMidnight(date || new Date());
+        const minutes = parseInt(delay_minutes) || 30;
+
+        if (!doctor_id) return res.status(400).json({ success: false, message: 'doctor_id is required' });
+
+        const doctor = await Doctor.findOne({ doctor_id });
+        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+
+        // Find all WAITING or CHECKED_IN tokens for this doctor today
+        const appointments = await Appointment.find({
+            doctor_id,
+            appointment_date: queryDate,
+            token_status: { $in: ['WAITING', 'CHECKED_IN'] },
+            is_deleted: false
+        }).lean();
+
+        if (appointments.length === 0) {
+            return res.status(200).json({ success: true, message: 'No waiting patients to notify' });
+        }
+
+        const { queueMessage, newBatchId } = require('../../services/messageQueueService');
+        const batchId = newBatchId();
+
+        let count = 0;
+        for (const appt of appointments) {
+            const patient = await Patient.findOne({ patient_id: appt.patient_id }).lean();
+            if (!patient) continue;
+
+            const wa_id = appt.wa_id || patient.wa_id || patient.parent_mobile;
+            if (!wa_id) continue;
+
+            // Calculate new time
+            let newTimeStr = appt.appointment_time;
+            try {
+                if (appt.appointment_time && appt.appointment_time.includes(':')) {
+                    const [h, m] = appt.appointment_time.split(':');
+                    const d = new Date();
+                    d.setHours(parseInt(h), parseInt(m) + minutes, 0, 0);
+                    newTimeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+                }
+            } catch (e) {
+                console.error('[notifyDelay] time calculation error:', e.message);
+            }
+
+            await queueMessage(wa_id, 'DOCTOR_RUNNING_LATE', {
+                parent_name: patient.father_name || patient.mother_name || 'Parent',
+                doctor_name: doctor.name,
+                minutes: minutes,
+                date: queryDate.toLocaleDateString(),
+                original_time: appt.appointment_time,
+                new_time: newTimeStr,
+                token: appt.token_number,
+                clinic_name: process.env.CLINIC_NAME || 'Dr. Indu Child Care Clinic'
+            }, { batchId, relatedEntity: { appointment_id: appt.appointment_id } });
+
+            count++;
+        }
+
+        await audit({
+            event_type: 'DOCTOR_DELAY_NOTIFIED',
+            entity_type: 'doctor_availability',
+            entity_id: doctor_id,
+            actor: req.user?.username || 'ADMIN',
+            actor_type: req.user?.role || 'ADMIN',
+            meta: { date: queryDate, delay_minutes: minutes, notified_count: count, batch_id: batchId }
+        });
+
+        res.json({ success: true, message: `Delay notification queued for ${count} waiting patients.` });
+    } catch (err) {
+        next(err);
+    }
+};
+// ── GET /api/appointments/wait-time/:doctor_id ──────────────────────
+exports.getWaitTime = async (req, res) => {
+    try {
+        const { doctor_id } = req.params;
+        const { date } = req.query;
+        const queryDate = toMidnight(date || new Date());
+
+        const doctor = await Doctor.findOne({ doctor_id });
+        if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });
+
+        const avgConsultationTime = doctor.avg_consultation_time || 10;
+
+        const [waitingCount, inProgress] = await Promise.all([
+            Appointment.countDocuments({
+                doctor_id,
+                appointment_date: queryDate,
+                token_status: { $in: ['WAITING', 'CHECKED_IN'] },
+                is_deleted: false
+            }),
+            Appointment.findOne({
+                doctor_id,
+                appointment_date: queryDate,
+                token_status: 'IN_PROGRESS',
+                is_deleted: false
+            }).select('called_at')
+        ]);
+
+        let currentPatientRemaining = 0;
+        if (inProgress && inProgress.called_at) {
+            const now = new Date();
+            const elapsed = Math.round((now - new Date(inProgress.called_at)) / 60000);
+            currentPatientRemaining = Math.max(0, avgConsultationTime - elapsed);
+        }
+
+        const totalEstimatedWaitMinutes = (waitingCount * avgConsultationTime) + currentPatientRemaining;
+
+        res.json({
+            success: true,
+            data: {
+                doctor_id,
+                doctor_name: doctor.name,
+                avg_consultation_time: avgConsultationTime,
+                patients_waiting: waitingCount,
+                in_progress: !!inProgress,
+                current_patient_remaining: currentPatientRemaining,
+                estimated_wait_minutes: totalEstimatedWaitMinutes,
+                estimated_wait_text: totalEstimatedWaitMinutes > 0 ? `${totalEstimatedWaitMinutes} min` : 'No wait'
+            }
+        });
+    } catch (err) {
+        next(err);
     }
 };

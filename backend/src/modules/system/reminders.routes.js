@@ -3,8 +3,8 @@ const router = express.Router();
 const Appointment = require('../../models/Appointment');
 const auth = require('../../middleware/auth');
 
-// POST /api/reminders/schedule — public (auth middleware allows public by default)
-router.post('/schedule', auth, async (req, res) => {
+// POST /api/reminders/schedule — public
+router.post('/schedule', async (req, res) => {
     try {
         const { appointment_id, reminder_type, send_at, message } = req.body || {};
 

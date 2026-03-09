@@ -15,6 +15,7 @@ const jwtOnly = require('./middleware/jwtOnly');
 dotenv.config();
 
 const app = express();
+console.log('--- DEBUG: app.js loaded from backend/src/app.js ---');
 
 // Security Headers
 app.use(helmet({
@@ -50,19 +51,23 @@ app.use('/api/auth', require('./modules/auth/auth.routes'));
 // Mount all modules - security is handled within each router file
 app.use('/api/patients', require('./modules/patients/patient.routes'));
 app.use('/api/appointments', require('./modules/appointments/appointment.routes'));
-app.use('/api/slots', require('./modules/system/slots.routes'));
 app.use('/api/mrd', require('./modules/patients/mrd.routes'));
 app.use('/api/bot', require('./modules/bot/bot.routes'));
+app.use('/api/bot/history', require('./modules/bot/history.routes'));
 app.use('/api/system', require('./modules/system/system.routes'));
 app.use('/api/config', require('./modules/system/config.routes'));
 app.use('/api/audit', require('./modules/system/audit.routes'));
 app.use('/api/doctors', require('./modules/doctors/doctor.routes'));
 app.use('/api/doctor', require('./modules/doctors/availability.routes'));
+app.use('/api/token-config', require('./modules/system/tokenConfig.routes'));
+app.use('/api/referring-doctors', require('./modules/system/referringDoctor.routes'));
 
 // New modules v1.1.0
 app.use('/api/notifications', require('./modules/system/notifications.routes'));
 app.use('/api/reminders', require('./modules/system/reminders.routes'));
 app.use('/api/reports', require('./modules/system/reports.routes'));
+app.use('/api/analytics', require('./modules/system/analytics.routes'));
+app.use('/api/feedback', require('./modules/system/feedback.routes'));
 
 // Messaging (doctor alerts, appointment notifications, token reminders)
 app.use('/api/messages', require('./modules/whatsapp/whatsapp.routes'));

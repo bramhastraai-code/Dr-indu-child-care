@@ -4,8 +4,8 @@ const Appointment = require('../../models/Appointment');
 const auth = require('../../middleware/auth');
 const { getDoctorIdFromSession } = require('../../utils/doctorScope');
 
-// GET /api/notifications — public (auth middleware allows public by default)
-router.get('/', auth, async (req, res) => {
+// GET /api/notifications — public
+router.get('/', async (req, res) => {
     try {
         const doctorId = getDoctorIdFromSession(req);
 
@@ -31,7 +31,7 @@ router.get('/', auth, async (req, res) => {
             notification_id: `NOT-${appt.appointment_id}`,
             type: 'APPOINTMENT_REMINDER',
             title: 'Appointment Tomorrow',
-            message: `Appointment ${appt.appointment_id} with ${appt.doctor_name || 'you'} is tomorrow at slot ${appt.slot_id}`,
+            message: `Appointment ${appt.appointment_id} with ${appt.doctor_name || 'you'} is tomorrow. Your token is ${appt.token_display || appt.token_number}`,
             related_entity_id: appt.appointment_id,
             is_read: appt.reminder_24h_sent || false,
             created_at: appt.created_at

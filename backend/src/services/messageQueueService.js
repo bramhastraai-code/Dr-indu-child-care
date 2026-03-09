@@ -4,6 +4,7 @@
  * messages via a cron job every 30 seconds.
  */
 const WhatsAppMessageQueue = require('../models/WhatsAppMessageQueue');
+const NotificationLog = require('../models/NotificationLog');
 const { sendMessage } = require('./watiService');
 
 // Strip leading "Dr." or "Dr " prefix so templates don't double it
@@ -123,20 +124,107 @@ We are here to help!
 Dr. Indu Child Care Clinic`,
 
     APPOINTMENT_CONFIRMED: (v) => `✅ Appointment Confirmed!
-
+ 
 Hi ${v.parent_name},
 
-📋 APPOINTMENT DETAILS:
+Your appointment with Dr. ${v.doctor_name} at *${v.clinic_name || 'Dr. Indu Child Care Clinic'}* is confirmed.
+
+📋 DETAILS:
 👶 Child: ${v.child_name}
 👨‍⚕️ Doctor: Dr. ${v.doctor_name}
 📅 Date: ${v.date}
 🕐 Time: ${v.appointment_time}
 🔖 Token: ${v.token}
 
-📍 ${v.clinic_address || process.env.CLINIC_ADDRESS || 'Dr. Indu Child Care Clinic'}
+📍 Address: ${v.clinic_address || process.env.CLINIC_ADDRESS || 'Dr. Indu Child Care Clinic'}
+📞 Contact: ${v.clinic_contact || process.env.CLINIC_PHONE || '91XXXXXXXXXX'}
 
-Please arrive 5 minutes before your appointment time.
+⏱️ Please ensure you arrive on time. Late arrivals may affect your consultation.
 
+Thank you!
+Dr. Indu Child Care Clinic`,
+
+    PRESCRIPTION_DELIVERY: (v) => v.message_custom || `Hi ${v.parent_name}, here is the prescription for ${v.child_name} from your visit on ${v.date}.`,
+
+    APPOINTMENT_REMINDER_24H: (v) => `🔔 Appointment Reminder (Tomorrow)
+
+Hi ${v.parent_name},
+
+This is a reminder for your appointment *tomorrow* with Dr. ${drName(v.doctor_name)}.
+
+📋 APPOINTMENT DETAILS:
+👶 Child: ${v.child_name}
+👨‍⚕️ Doctor: Dr. ${drName(v.doctor_name)}
+📅 Date: ${v.date}
+🕐 Scheduled Time: ${v.appointment_time}
+🔖 Token: ${v.token}
+
+⚠️ Please do not be late. Your appointment is scheduled for ${v.appointment_time}. Late arrivals may result in losing your token.
+
+📍 ${v.clinic_name || 'Dr. Indu Child Care Clinic'}
+📞 ${v.clinic_contact || process.env.CLINIC_PHONE || ''}
+
+Thank you!
+Dr. Indu Child Care Clinic`,
+
+    APPOINTMENT_REMINDER_1H: (v) => `⏰ Appointment in 1 Hour!
+
+Hi ${v.parent_name},
+
+Your appointment with Dr. ${drName(v.doctor_name)} is *coming up in 1 hour*!
+
+📋 APPOINTMENT DETAILS:
+👶 Child: ${v.child_name}
+👨‍⚕️ Doctor: Dr. ${drName(v.doctor_name)}
+📅 Date: ${v.date}
+🕐 Scheduled Time: ${v.appointment_time}
+🔖 Token: ${v.token}
+
+⚠️ Please do not be late. Your appointment is scheduled for ${v.appointment_time}. Late arrivals may affect your consultation.
+
+📍 ${v.clinic_name || 'Dr. Indu Child Care Clinic'}
+📞 ${v.clinic_contact || process.env.CLINIC_PHONE || ''}
+
+We look forward to seeing you!
+Dr. Indu Child Care Clinic`,
+
+    APPOINTMENT_REMINDER_2H: (v) => `🔔 Appointment Reminder (2 Hours)
+
+Hi ${v.parent_name},
+
+Your appointment with Dr. ${drName(v.doctor_name)} is in *2 hours*.
+
+📋 APPOINTMENT DETAILS:
+👶 Child: ${v.child_name}
+👨‍⚕️ Doctor: Dr. ${drName(v.doctor_name)}
+🕐 Scheduled Time: ${v.appointment_time}
+🔖 Token: ${v.token}
+
+⚠️ Please do not be late. Your appointment is scheduled for ${v.appointment_time}. Late arrivals may affect your consultation.
+
+📍 ${v.clinic_name || 'Dr. Indu Child Care Clinic'}
+
+Dr. Indu Child Care Clinic`,
+
+    APPOINTMENT_TIME_UPDATED: (v) => `🔔 Appointment Time Update
+
+Hi ${v.parent_name},
+
+Your appointment time for today has been updated by Dr. ${drName(v.doctor_name)}.
+
+📋 UPDATED DETAILS:
+👶 Child: ${v.child_name}
+👨‍⚕️ Doctor: Dr. ${drName(v.doctor_name)}
+📅 Date: ${v.date}
+🕐 New Expected Time: *${v.appointment_time}*
+🔖 Token: ${v.token}
+
+⚠️ Please plan your visit accordingly. Your token number remains unchanged.
+
+📍 ${v.clinic_name || 'Dr. Indu Child Care Clinic'}
+📞 ${v.clinic_contact || process.env.CLINIC_PHONE || ''}
+
+Thank you for your patience!
 Dr. Indu Child Care Clinic`
 };
 
@@ -199,6 +287,20 @@ async function processPendingMessages() {
                     await WhatsAppMessageQueue.updateOne({ _id: msg._id }, {
                         $set: { status: 'SENT', message_id: result.message_id, sent_at: new Date() }
                     });
+
+                    // Log to NotificationLog
+                    await NotificationLog.create({
+                        patient_id: msg.related_entity?.patient_id || 'UNKNOWN',
+                        notification_type: msg.message_type.toLowerCase().includes('reminder_24h') ? 'reminder_24h' :
+                            msg.message_type.toLowerCase().includes('reminder_1h') ? 'reminder_1h' :
+                                msg.message_type.toLowerCase().includes('reminder_2h') ? 'reminder_2h' :
+                                    msg.message_type.toLowerCase().includes('time_updated') ? 'time_update' :
+                                        msg.message_type.toLowerCase().includes('confirmed') ? 'confirmation' : 'delay',
+                        whatsapp_number: msg.wa_id,
+                        status: 'sent',
+                        sent_at: new Date()
+                    }).catch(e => console.error('[MQ] NotificationLog save error:', e.message));
+
                 } else {
                     const retries = msg.retry_count + 1;
                     const failed = retries >= 3;
@@ -210,6 +312,16 @@ async function processPendingMessages() {
                             scheduled_for: failed ? msg.scheduled_for : new Date(Date.now() + 5 * 60 * 1000)
                         }
                     });
+
+                    if (failed) {
+                        await NotificationLog.create({
+                            patient_id: msg.related_entity?.patient_id || 'UNKNOWN',
+                            notification_type: 'delay', // Default fallback
+                            whatsapp_number: msg.wa_id,
+                            status: 'failed',
+                            sent_at: null
+                        }).catch(e => console.error('[MQ] NotificationLog failure log error:', e.message));
+                    }
                 }
             } catch (err) {
                 console.error(`[MQ] Error sending ${msg._id}: `, err.message);

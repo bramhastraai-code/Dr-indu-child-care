@@ -9,10 +9,6 @@ const createDoctor = Joi.object({
     login_email: Joi.string().trim().lowercase().email().optional(),
     password: Joi.string().min(6).max(128).optional(),
     is_active: Joi.boolean().default(true),
-    available_slots: Joi.object().pattern(
-        Joi.string().regex(/^[0-6]$/), // 0-6 for days of week
-        Joi.array().items(Joi.string()) // array of slot_ids
-    ).optional()
 }).custom((value, helpers) => {
     const hasUsername = !!value.login_username;
     const hasEmail = !!value.login_email;
@@ -40,10 +36,6 @@ const updateDoctor = Joi.object({
     login_email: Joi.string().trim().lowercase().email().optional(),
     password: Joi.string().min(6).max(128).optional(),
     is_active: Joi.boolean(),
-    available_slots: Joi.object().pattern(
-        Joi.string().regex(/^[0-6]$/),
-        Joi.array().items(Joi.string())
-    ).optional()
 });
 
 module.exports = {

@@ -4,15 +4,16 @@
 
 /**
  * Normalizes a date to midnight UTC.
- * @param {Date|string} d 
+ * @param {Date|string} d
  * @returns {Date}
  */
 const toMidnight = (d) => {
     let date;
-    if (d === 'today') {
+    if (!d || d === 'today') {
         date = new Date();
     } else {
         date = new Date(d);
+        if (isNaN(date.getTime())) date = new Date();
     }
     date.setUTCHours(0, 0, 0, 0);
     return date;
@@ -20,14 +21,14 @@ const toMidnight = (d) => {
 
 /**
  * Normalizes a WhatsApp ID by stripping the @suffix.
- * @param {string} wa_id 
+ * @param {string} wa_id
  * @returns {string}
  */
 const normalizeWaId = (wa_id = '') => String(wa_id).replace(/@.*$/, '').trim();
 
 /**
  * Extracts a 10-digit local mobile number from various formats.
- * @param {string} wa_id 
+ * @param {string} wa_id
  * @returns {string}
  */
 const extractMobile = (wa_id = '') => {
@@ -40,14 +41,29 @@ const extractMobile = (wa_id = '') => {
 
 /**
  * Normalizes a phone number for consistent lookup.
- * @param {string} phone 
+ * @param {string} phone
  * @returns {string}
  */
 const normalizePhone = (phone) => extractMobile(phone);
 
 /**
+ * Normalizes gender labels from legacy and current clients.
+ * Canonical values: boy, girl.
+ * @param {string|null|undefined} gender
+ * @returns {string|null}
+ */
+const normalizeGender = (gender) => {
+    if (gender === undefined || gender === null || gender === '') return null;
+    const value = String(gender).trim().toLowerCase();
+    if (value === 'boy' || value === 'male' || value === 'm') return 'boy';
+    if (value === 'girl' || value === 'female' || value === 'f') return 'girl';
+    if (value === 'other' || value === 'others' || value === 'o') return null;
+    return null;
+};
+
+/**
  * Canonicalizes doctor names: strip extra spaces and handle prefixes ("Dr." vs "Dr ") consistently for lookups.
- * @param {string} name 
+ * @param {string} name
  * @returns {string}
  */
 const canonicalizeDoctorName = (name) => {
@@ -73,8 +89,8 @@ const canonicalizeDoctorName = (name) => {
 /**
  * Generates the next token number for a doctor on a given date.
  * @param {Object} Appointment - The Mongoose Appointment model.
- * @param {string} doctor_id 
- * @param {Date} date 
+ * @param {string} doctor_id
+ * @param {Date} date
  * @returns {Promise<number>}
  */
 const getNextToken = async (Appointment, doctor_id, date) => {
@@ -91,6 +107,8 @@ module.exports = {
     normalizeWaId,
     extractMobile,
     normalizePhone,
+    normalizeGender,
     canonicalizeDoctorName,
     getNextToken
 };
+

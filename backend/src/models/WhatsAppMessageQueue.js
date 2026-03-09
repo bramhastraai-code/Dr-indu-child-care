@@ -26,7 +26,12 @@ const WhatsAppMessageQueueSchema = new mongoose.Schema({
             'TOKEN_CALL_REMINDER',
             'APPOINTMENT_COMPLETED',
             'NO_SHOW_NOTICE',
-            'APPOINTMENT_CONFIRMED'
+            'APPOINTMENT_CONFIRMED',
+            'PRESCRIPTION_DELIVERY',
+            'APPOINTMENT_REMINDER_24H',
+            'APPOINTMENT_REMINDER_2H',
+            'APPOINTMENT_REMINDER_1H',
+            'APPOINTMENT_TIME_UPDATED'
         ],
         required: true
     },
