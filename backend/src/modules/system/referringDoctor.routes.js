@@ -5,13 +5,12 @@ const auth = require('../../middleware/auth');
 const authorize = require('../../middleware/rbac');
 const ADMIN_ONLY = ['superadmin', 'admin'];
 
-router.use(auth);
-
+// Publicly accessible referring doctor routes
 router.get('/', referringDoctorController.getReferringDoctors);
 router.get('/:id', referringDoctorController.getReferringDoctorById);
-router.post('/', authorize(ADMIN_ONLY), referringDoctorController.createReferringDoctor);
-router.patch('/:id', authorize(ADMIN_ONLY), referringDoctorController.updateReferringDoctor);
-router.delete('/:id', authorize(ADMIN_ONLY), referringDoctorController.deleteReferringDoctor);
+router.post('/', referringDoctorController.createReferringDoctor);
+router.patch('/:id', referringDoctorController.updateReferringDoctor);
+router.delete('/:id', referringDoctorController.deleteReferringDoctor);
 router.get('/:id/report', referringDoctorController.getReferralReport);
 
 module.exports = router;
