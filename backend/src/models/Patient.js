@@ -168,6 +168,28 @@ const PatientSchema = new mongoose.Schema({
     index: true
   },
 
+  // ── Section 4: Address Details ───────────────────────────────
+  residential_address: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  city: {
+    type: String,
+    trim: true,
+    default: 'Mumbai'
+  },
+  state: {
+    type: String,
+    trim: true,
+    default: 'Maharashtra'
+  },
+  pincode: {
+    type: String,
+    trim: true,
+    default: null
+  },
+
   // ── Section 5: Additional Details ────────────────────────────
   source: {
     type: String,
