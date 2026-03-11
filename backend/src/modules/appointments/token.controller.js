@@ -717,6 +717,7 @@ exports.notifyDelay = async (req, res) => {
 
         const { queueMessage, newBatchId } = require('../../services/messageQueueService');
         const batchId = newBatchId();
+        const axios = require('axios');
 
         let count = 0;
         for (const appt of appointments) {
@@ -749,6 +750,19 @@ exports.notifyDelay = async (req, res) => {
                 token: appt.token_number,
                 clinic_name: process.env.CLINIC_NAME || 'Dr. Indu Child Care Clinic'
             }, { batchId, relatedEntity: { appointment_id: appt.appointment_id } });
+
+            // Trigger n8n webhook for Doctor late delay
+            axios.post('https://n8n.brahmaastra.ai/webhook/Doctor-update', {
+                mobile: wa_id, // Combine wa_id/mobile as just "mobile"
+                patient_name: patient.child_name || 'Patient',
+                parent_name: patient.father_name || patient.mother_name || 'Parent',
+                doctor_name: doctor.name,
+                delay_minutes: minutes,
+                original_time: appt.appointment_time,
+                new_time: newTimeStr,
+                token_number: appt.token_number,
+                appointment_date: queryDate.toISOString().split('T')[0]
+            }).catch(err => console.error('[notifyDelay n8n] webhook failed:', err.message));
 
             count++;
         }
