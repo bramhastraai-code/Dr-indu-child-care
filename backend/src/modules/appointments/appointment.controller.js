@@ -574,7 +574,7 @@ exports.createAppointment = async (req, res, next) => {
         };
 
         // Trigger n8n webhook
-        axios.post('https://n8n.brahmaastra.ai/webhook/appointment-update', responseData)
+        axios.post('https://n8n.brahmaastra.ai/webhook/appointment', responseData)
             .catch(err => console.error('Appointment webhook failed:', err.message));
 
         res.status(201).json({
@@ -747,11 +747,17 @@ exports.updateAppointment = async (req, res) => {
         });
 
         const enriched = await enrichAppointment(updated);
+
+        // Trigger n8n webhook for appointment modification
+        axios.post('https://n8n.brahmaastra.ai/webhook/appointment-upgradation', enriched)
+            .catch(err => console.error('[updateAppointment] n8n webhook failed:', err.message));
+
         res.json({ success: true, data: enriched });
     } catch (err) {
         next(err);
     }
 };
+
 
 // ── 7. PATCH /api/appointments/:appointment_id/cancel ────────────────────────
 // Cancel by bot or dashboard — same endpoint, cancelled_by field tracks who
