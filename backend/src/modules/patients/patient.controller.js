@@ -137,12 +137,14 @@ exports.registerPatient = async (req, res, next) => {
             remarks,
             remark,
 
-            // Section 6 – Enrollment
-            enrollment_option,
-            send_to_specific,
-
             // Section 7 – Status
             is_active,
+
+            // Section 8 – Address
+            state,
+            city,
+            pincode,
+            residential_address,
         } = req.body || {};
 
         // 1. Resolve Child Name (Combine parts if missing)
@@ -264,7 +266,13 @@ exports.registerPatient = async (req, res, next) => {
             send_to_specific: send_to_specific ?? false,
             is_active: is_active !== undefined ? is_active : true,
 
-            registration_source: (registration_source || 'dashboard').toLowerCase()
+            registration_source: (registration_source || 'dashboard').toLowerCase(),
+
+            // Address
+            state: state || 'Maharashtra',
+            city: city || 'Mumbai',
+            pincode: pincode || null,
+            residential_address: residential_address || null
         });
 
         // Create blank MRD shell
@@ -503,6 +511,8 @@ exports.getPatients = async (req, res, next) => {
             query.gender = normalizedFilterGender || gender;
         }
         if (doctor) query.doctor = new RegExp(doctor, 'i');
+        if (city) query.city = new RegExp(city, 'i');
+        if (state) query.state = new RegExp(state, 'i');
 
         if (search) {
             const searchHash = hashField(normalizePhone(search));
@@ -516,6 +526,8 @@ exports.getPatients = async (req, res, next) => {
                 { mother_name: regex },
                 { patient_id: regex },
                 { patient_key: regex },
+                { city: regex },
+                { residential_address: regex },
                 { wa_hash: searchHash }
             ];
         }

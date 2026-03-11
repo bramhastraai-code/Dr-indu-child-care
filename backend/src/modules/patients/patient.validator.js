@@ -70,6 +70,10 @@ const basePatientFields = {
         .lowercase(),
     child_name: Joi.string().trim().max(100).allow('', null),
     parent_name: Joi.string().trim().max(100).allow('', null),
+    state: optionalStr().max(100),
+    city: optionalStr().max(100),
+    pincode: optionalStr().max(20),
+    residential_address: optionalStr().max(500),
 };
 
 const registerSchema = Joi.object({
