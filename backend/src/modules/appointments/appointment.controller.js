@@ -16,6 +16,7 @@ const {
     withDoctorFilter
 } = require('../../utils/doctorScope');
 const { queueMessage } = require('../../services/messageQueueService');
+const axios = require('axios');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -553,26 +554,32 @@ exports.createAppointment = async (req, res, next) => {
             new_value: { patient_id: patient.patient_id, date: appointment_date, booking_source: safeBookingSource, doctor_id: finalDoctorId, token_number, token_pool }
         });
 
+        const responseData = {
+            appointment_id,
+            patient_id: patient.patient_id,
+            child_name: patient.child_name,
+            wa_id: patient.wa_id,
+            status: 'CONFIRMED',
+            booking_source: safeBookingSource,
+            appointment_date: queryDate,
+            appointment_time: appointment_time || null,
+            doctor_name: finalDoctorName,
+            doctor_speciality: finalDoctorSpeciality,
+            doctor_id: finalDoctorId,
+            visit_category: normalized_category,
+            appointment_mode: appointment_mode || 'OFFLINE',
+            token_number,
+            token_pool,
+            token_status: 'WAITING'
+        };
+
+        // Trigger n8n webhook
+        axios.post('https://n8n.brahmaastra.ai/webhook/appointment-update', responseData)
+            .catch(err => console.error('Appointment webhook failed:', err.message));
+
         res.status(201).json({
             success: true,
-            data: {
-                appointment_id,
-                patient_id: patient.patient_id,
-                child_name: patient.child_name,
-                wa_id: patient.wa_id,
-                status: 'CONFIRMED',
-                booking_source: safeBookingSource,
-                appointment_date: queryDate,
-                appointment_time: appointment_time || null,
-                doctor_name: finalDoctorName,
-                doctor_speciality: finalDoctorSpeciality,
-                doctor_id: finalDoctorId,
-                visit_category: normalized_category,
-                appointment_mode: appointment_mode || 'OFFLINE',
-                token_number,
-                token_pool,
-                token_status: 'WAITING'
-            }
+            data: responseData
         });
 
     } catch (err) {

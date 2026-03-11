@@ -832,6 +832,36 @@ const spec = {
         '/api/reports/dashboard': { get: { tags: ['Reports & Analytics'], summary: 'Overview metrics', responses: { 200: { description: 'Daily stats' } } } },
         '/api/reports/appointments': { get: { tags: ['Reports & Analytics'], summary: 'Appointment list report', parameters: [queryParam('from', '2026-06-01'), queryParam('to', '2026-06-15')], responses: { 200: { description: 'Success' } } } },
 
+        // ══ FEEDBACK ═══════════════════════════════════════════════════════════
+        '/api/feedback': {
+            get: {
+                tags: ['Reports & Analytics'],
+                summary: 'Get all patient feedback',
+                parameters: [
+                    queryParam('page', '1'),
+                    queryParam('limit', '20'),
+                    queryParam('from_date', '2026-01-01'),
+                    queryParam('to_date', '2026-12-31')
+                ],
+                responses: { 200: { description: 'List of feedback responses' } }
+            },
+            post: {
+                tags: ['Reports & Analytics'],
+                summary: 'Submit patient feedback (Public)',
+                description: 'Public API endpoint to submit a rating across doctor, frontdesk, and hospital experience.',
+                requestBody: body({
+                    doctor_rating: 5,
+                    frontdesk_rating: 4,
+                    hospital_rating: 5,
+                    name: 'Rahul Sharma',
+                    mobile: '9876543210',
+                    email: 'rahul@example.com',
+                    appointment_id: 'APT-2026-00001'
+                }),
+                responses: { 201: { description: 'Feedback submitted successfully' } }
+            }
+        },
+
         // ══ TOKEN CONFIG ═══════════════════════════════════════════════════════
         '/api/token-config/{doctor_id}': {
             get: {

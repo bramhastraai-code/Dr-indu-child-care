@@ -5,11 +5,9 @@ const Appointment = require('../../models/Appointment');
 const audit = require('../../utils/audit');
 const { normalizePhone, normalizeWaId, normalizeGender } = require('../../utils/helpers');
 const { hashField, decrypt } = require('../../utils/encryption');
-const {
-    getDoctorIdFromSession,
-    ensureDoctorSessionHasProfile
-} = require('../../utils/doctorScope');
+const { getDoctorIdFromSession, ensureDoctorSessionHasProfile } = require('../../utils/doctorScope');
 const { generatePatientKey } = require('../../utils/patientKey');
+const axios = require('axios');
 
 // Helper: parse DD/MM/YYYY or YYYY-MM-DD to Date
 const parseDOB = (raw) => {
@@ -290,6 +288,16 @@ exports.registerPatient = async (req, res, next) => {
             actor_type: actor_role,
             meta: { child_name, registration_source }
         });
+
+        // Trigger n8n webhook
+        axios.post('https://n8n.brahmaastra.ai/webhook/Registration', {
+            patient_id,
+            child_name: final_child_name,
+            wa_id: final_wa_id,
+            email,
+            doctor,
+            registration_source: (registration_source || 'dashboard').toLowerCase()
+        }).catch(err => console.error('Registration webhook failed:', err.message));
 
         res.status(201).json({ success: true, data: patient });
 

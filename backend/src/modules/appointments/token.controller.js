@@ -142,6 +142,82 @@ exports.getDailyTokens = async (req, res) => {
         const patientMap = {};
         patients.forEach(p => { patientMap[p.patient_id] = p.child_name || p.full_name; });
 
+        // Group by doctor to calculate approx_time dynamically
+        const docs = await Doctor.find({ is_active: true }).lean();
+        const drAvgMap = {};
+        docs.forEach(d => { drAvgMap[d.doctor_id] = d.avg_consultation_time || 10; });
+
+        const now = new Date();
+        const docQueues = {};
+
+        // Separate out into queues by doctor
+        appointments.forEach(a => {
+            if (!docQueues[a.doctor_id]) {
+                docQueues[a.doctor_id] = {
+                    inProgress: null,
+                    waiting: [],
+                    avgTime: drAvgMap[a.doctor_id] || 10
+                };
+            }
+            if (a.token_status === 'IN_PROGRESS') {
+                docQueues[a.doctor_id].inProgress = a;
+            } else if (a.token_status === 'CHECKED_IN' || a.token_status === 'WAITING') {
+                docQueues[a.doctor_id].waiting.push(a);
+            }
+        });
+
+        // Calculate dynamic rolling approx_time relative to now if there is an active queue
+        appointments.forEach(a => {
+            a.approx_time = a.appointment_time || null;
+            if (a.token_status === 'COMPLETED') {
+                a.approx_time = 'Completed';
+            } else if (a.token_status === 'SKIPPED' || a.token_status === 'NO_SHOW') {
+                a.approx_time = a.token_status; // Just reflect the status
+            } else if (a.token_status === 'IN_PROGRESS') {
+                a.approx_time = 'Now';
+            }
+        });
+
+        for (const drId in docQueues) {
+            const queue = docQueues[drId];
+            queue.waiting.sort((a, b) => {
+                // Priority: CHECKED_IN over WAITING, then by token number
+                if (a.token_status === 'CHECKED_IN' && b.token_status !== 'CHECKED_IN') return -1;
+                if (a.token_status !== 'CHECKED_IN' && b.token_status === 'CHECKED_IN') return 1;
+                return (a.token_number || 0) - (b.token_number || 0);
+            });
+
+            let currentMinsFromNow = 0;
+            if (queue.inProgress && queue.inProgress.called_at) {
+                const elapsed = Math.round((now - new Date(queue.inProgress.called_at)) / 60000);
+                currentMinsFromNow = Math.max(0, queue.avgTime - elapsed);
+            }
+
+            let rollingWaitIndex = 0;
+            queue.waiting.forEach(waitingAppt => {
+                const totalWaitMins = currentMinsFromNow + (rollingWaitIndex * queue.avgTime);
+                const projectedTime = new Date(now.getTime() + totalWaitMins * 60000);
+
+                let [baseH, baseM] = (waitingAppt.appointment_time || '10:00').split(':').map(Number);
+                const scheduledTime = new Date(queryDate.getTime());
+                scheduledTime.setHours(baseH, baseM, 0, 0);
+
+                // Use the projected time if it's delayed past the scheduled time, else use the scheduled time
+                const finalTime = projectedTime > scheduledTime ? projectedTime : scheduledTime;
+
+                // Format it back to YYYY-MM-DD HH:MM AM/PM
+                const year = finalTime.getFullYear();
+                const month = String(finalTime.getMonth() + 1).padStart(2, '0');
+                const day = String(finalTime.getDate()).padStart(2, '0');
+                const minutes = finalTime.getMinutes().toString().padStart(2, '0');
+                const ampm = finalTime.getHours() >= 12 ? 'PM' : 'AM';
+                const hours12 = (finalTime.getHours() % 12) || 12;
+
+                waitingAppt.approx_time = `${year}-${month}-${day} ${hours12}:${minutes} ${ampm}`;
+                rollingWaitIndex++;
+            });
+        }
+
         const enriched = appointments.map(a => ({
             _id: a._id,
             patient_id: a.patient_id,
@@ -150,6 +226,9 @@ exports.getDailyTokens = async (req, res) => {
             token_display: a.token_display,
             token_number: a.token_number,
             token_pool: a.token_pool,
+            appointment_date: a.appointment_date,
+            appointment_time: a.appointment_time,
+            approx_time: a.approx_time || a.appointment_time,
             status: a.token_status,
             appointment_id: a.appointment_id,
             doctor_name: a.doctor_name,
@@ -213,6 +292,7 @@ exports.getClinicDisplay = async (req, res) => {
                 doctor_name: dr.name,
                 speciality: dr.speciality,
                 now_serving_token: nowServing?.token_number || null,
+                now_serving_patient: nowServing ? pMap[nowServing.patient_id] : null,
                 next_token: waiting[0]?.token_number || null,
                 queue_length: waiting.length,
                 status: avail.status || 'PRESENT',
@@ -420,76 +500,143 @@ exports.getTokenStatus = async (req, res) => {
 
 // ── POST /api/appointments/auto-reschedule ───────────────────────────
 // Auto-reschedule NO_SHOW or same-day cancelled appointments to next available token
-exports.autoReschedule = async (req, res) => {
+exports.autoReschedule = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
-        const { appointment_id, target_date, reason } = req.body || {};
-
-        if (!appointment_id) return res.status(400).json({ success: false, message: 'appointment_id is required' });
-
-        const appt = await Appointment.findOne({ appointment_id });
-        if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
-        if (!ensureDoctorMatches(req, res, appt.doctor_id, 'You can only reschedule your own appointments')) return;
-
-        if (!['NO_SHOW', 'CANCELLED'].includes(appt.status)) {
-            return res.status(400).json({ success: false, message: 'Only NO_SHOW or CANCELLED appointments can be auto-rescheduled' });
-        }
+        const { appointment_id, doctor_id, date, target_date, reason } = req.body || {};
 
         const targetDate = toMidnight(target_date || (() => {
             const d = new Date(); d.setDate(d.getDate() + 1); return d;
         })());
 
-        const shift = await getDoctorShiftConfig(appt.doctor_id, targetDate);
+        // Single Appointment Reschedule
+        if (appointment_id) {
+            const appt = await Appointment.findOne({ appointment_id });
+            if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
+            if (!ensureDoctorMatches(req, res, appt.doctor_id, 'You can only reschedule your own appointments')) return;
 
-        // Generate new appointment ID
-        const new_appointment_id = await generateAppointmentId();
+            if (!['NO_SHOW', 'CANCELLED'].includes(appt.status)) {
+                return res.status(400).json({ success: false, message: 'Only NO_SHOW or CANCELLED appointments can be auto-rescheduled' });
+            }
 
-        const newApptData = {
-            appointment_id: new_appointment_id,
-            patient_id: appt.patient_id,
-            doctor_id: appt.doctor_id,
-            doctor_name: appt.doctor_name,
-            doctor_speciality: appt.doctor_speciality,
-            appointment_date: targetDate,
-            appointment_time: shift.start_time,
-            visit_type: appt.visit_type,
-            reason: reason || `Auto-rescheduled from ${appointment_id} (${appt.status})`,
-            status: 'CONFIRMED',
-            booking_source: 'dashboard',
-            registration_type: appt.registration_type || 'online',
-            token_pool: appt.token_pool || 'ONLINE',
-            token_number: null,
-            token_status: 'PENDING',
-            confirmation_sent: false,
-            created_at: new Date(),
-            last_updated_at: new Date(),
-            last_updated_by: req.user?.username || 'SYSTEM'
+            const shift = await getDoctorShiftConfig(appt.doctor_id, targetDate);
+            const new_appointment_id = await generateAppointmentId();
+
+            const newApptData = {
+                appointment_id: new_appointment_id,
+                patient_id: appt.patient_id,
+                doctor_id: appt.doctor_id,
+                doctor_name: appt.doctor_name,
+                doctor_speciality: appt.doctor_speciality,
+                appointment_date: targetDate,
+                appointment_time: shift.start_time,
+                visit_type: appt.visit_type,
+                reason: reason || `Auto-rescheduled from ${appointment_id} (${appt.status})`,
+                status: 'CONFIRMED',
+                booking_source: 'dashboard',
+                registration_type: appt.registration_type || 'online',
+                token_pool: appt.token_pool || 'ONLINE',
+                token_number: null,
+                token_status: 'PENDING',
+                confirmation_sent: false,
+                created_at: new Date(),
+                last_updated_at: new Date(),
+                last_updated_by: req.user?.username || 'SYSTEM'
+            };
+
+            await Appointment.create(newApptData);
+            await assignTokensForDate(targetDate);
+
+            await audit({
+                event_type: 'APPOINTMENT_AUTO_RESCHEDULED',
+                entity_type: 'appointment',
+                entity_id: new_appointment_id,
+                actor: req.user?.username || 'SYSTEM',
+                actor_type: 'SYSTEM',
+                new_value: { original_id: appointment_id, new_id: new_appointment_id, target_date: targetDate }
+            });
+
+            return res.status(201).json({
+                success: true,
+                message: 'Appointment auto-rescheduled successfully',
+                data: {
+                    original_appointment_id: appointment_id,
+                    new_appointment_id,
+                    new_date: targetDate,
+                    token_status: 'PENDING'
+                }
+            });
+        }
+
+        // Bulk Auto-Reschedule
+        const queryDate = toMidnight(date || new Date());
+        const filter = {
+            appointment_date: queryDate,
+            status: { $in: ['NO_SHOW', 'CANCELLED'] },
+            is_deleted: false
         };
 
-        const newAppt = await Appointment.create(newApptData);
+        const sessionDoctorId = getDoctorIdFromSession(req);
+        if (sessionDoctorId) {
+            filter.doctor_id = sessionDoctorId;
+        } else if (doctor_id) {
+            filter.doctor_id = doctor_id;
+        }
 
-        // Immediately try to assign token if possible
+        const apptsToReschedule = await Appointment.find(filter);
+
+        if (apptsToReschedule.length === 0) {
+            return res.status(200).json({ success: true, message: 'No missed or cancelled appointments found to reschedule.' });
+        }
+
+        let rescheduledCount = 0;
+        for (const appt of apptsToReschedule) {
+            const shift = await getDoctorShiftConfig(appt.doctor_id, targetDate);
+            const new_appointment_id = await generateAppointmentId();
+
+            const newApptData = {
+                appointment_id: new_appointment_id,
+                patient_id: appt.patient_id,
+                doctor_id: appt.doctor_id,
+                doctor_name: appt.doctor_name,
+                doctor_speciality: appt.doctor_speciality,
+                appointment_date: targetDate,
+                appointment_time: shift.start_time,
+                visit_type: appt.visit_type,
+                reason: reason || `Auto-rescheduled from ${appt.appointment_id} (${appt.status})`,
+                status: 'CONFIRMED',
+                booking_source: 'dashboard',
+                registration_type: appt.registration_type || 'online',
+                token_pool: appt.token_pool || 'ONLINE',
+                token_number: null,
+                token_status: 'PENDING',
+                confirmation_sent: false,
+                created_at: new Date(),
+                last_updated_at: new Date(),
+                last_updated_by: req.user?.username || 'SYSTEM'
+            };
+
+            await Appointment.create(newApptData);
+
+            await audit({
+                event_type: 'APPOINTMENT_AUTO_RESCHEDULED',
+                entity_type: 'appointment',
+                entity_id: new_appointment_id,
+                actor: req.user?.username || 'SYSTEM',
+                actor_type: 'SYSTEM',
+                new_value: { original_id: appt.appointment_id, new_id: new_appointment_id, target_date: targetDate }
+            });
+
+            rescheduledCount++;
+        }
+
         await assignTokensForDate(targetDate);
-
-        await audit({
-            event_type: 'APPOINTMENT_AUTO_RESCHEDULED',
-            entity_type: 'appointment',
-            entity_id: new_appointment_id,
-            actor: req.user?.username || 'SYSTEM',
-            actor_type: 'SYSTEM',
-            new_value: { original_id: appointment_id, new_id: new_appointment_id, target_date: targetDate }
-        });
 
         res.status(201).json({
             success: true,
-            message: 'Appointment auto-rescheduled successfully',
-            data: {
-                original_appointment_id: appointment_id,
-                new_appointment_id,
-                new_date: targetDate,
-                token_status: 'PENDING'
-            }
+            message: `Successfully auto-rescheduled ${rescheduledCount} missed appointments.`,
+            rescheduled_count: rescheduledCount
         });
     } catch (err) {
         next(err);
