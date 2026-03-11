@@ -106,11 +106,6 @@ const PatientSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
-  // Deprecated: use patient_photo instead
-  photo: {
-    type: String,   // Base64 encoded string or URL
-    default: null
-  },
   patient_photo: {
     type: String,
     default: null
@@ -149,13 +144,6 @@ const PatientSchema = new mongoose.Schema({
     default: null
   },
   mother_occupation: {
-    type: String,
-    trim: true,
-    default: null
-  },
-
-  // Legacy parent_name kept for backward-compat
-  parent_name: {
     type: String,
     trim: true,
     default: null
@@ -222,12 +210,6 @@ const PatientSchema = new mongoose.Schema({
   },
 
   remarks: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  // Deprecated: use remarks instead
-  remark: {
     type: String,
     trim: true,
     default: null

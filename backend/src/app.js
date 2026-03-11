@@ -84,6 +84,10 @@ const errorHandler = require('./middleware/error');
 // Global error handler
 app.use(errorHandler);
 
+// Initialize Background Automation Jobs
+const { initCronJobs } = require('./services/cronJobs');
+initCronJobs();
+
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {

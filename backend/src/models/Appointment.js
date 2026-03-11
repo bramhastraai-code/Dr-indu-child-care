@@ -33,10 +33,6 @@ const AppointmentSchema = new mongoose.Schema({
         type: String,
         default: null
     },
-    doctor_speciality: {
-        type: String,
-        default: null
-    },
     visit_category: {
         type: String,
         enum: ['First visit', 'Follow-up', 'Vaccination', 'Other'],

@@ -1334,7 +1334,7 @@ exports.bookByForm = async (req, res) => {
 
 // ── 9. GET /api/appointments/reminders/pending-24h ───────────────────────────
 // Fetch appointments for tomorrow that haven't had a 24h reminder sent.
-exports.getPending24hReminders = async (req, res) => {
+exports.getPending24hReminders = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -1353,6 +1353,43 @@ exports.getPending24hReminders = async (req, res) => {
         const appointments = await Appointment.find(reminderFilter).sort({ token_number: 1 });
 
         const enriched = await Promise.all(appointments.map(enrichAppointment));
+
+        if (appointments.length > 0) {
+            const appointmentIds = appointments.map(a => a._id);
+            await Appointment.updateMany(
+                { _id: { $in: appointmentIds } },
+                {
+                    $set: {
+                        reminder_24h_sent: true,
+                        reminder_24h_sent_at: new Date(),
+                        last_updated_at: new Date(),
+                        last_updated_by: 'SYSTEM_BULK_REMINDER'
+                    }
+                }
+            );
+
+            // POST to webhook
+            const axios = require('axios');
+            for (const appt of enriched) {
+                const payload = {
+                    appointment_id: appt.appointment_id,
+                    patient_id: appt.patient_id,
+                    child_name: appt.child_name,
+                    parent_name: appt.parent_name,
+                    status: appt.status,
+                    appointment_date: appt.formatted_date || (appt.appointment_date ? appt.appointment_date.toISOString().split('T')[0] : null),
+                    appointment_time: appt.start_time || appt.appointment_time,
+                    doctor_name: appt.doctor_name,
+                    token_number: appt.token_number,
+                    event_type: 'APPOINTMENT_REMINDER_24H'
+                };
+                
+                // Fire and forget
+                axios.post('https://n8n.brahmaastra.ai/webhook/24hr-message', payload)
+                    .catch(err => console.error('[Pending24h] Webhook failed:', err.message));
+            }
+        }
+
         res.json({
             success: true,
             date: queryDate,
