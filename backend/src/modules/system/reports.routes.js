@@ -16,52 +16,92 @@ const REPORT_ROLES = ['superadmin', 'admin', 'staff', 'secretary', 'doctor'];
 router.get('/dashboard', async (req, res) => {
     try {
         const sessionDoctorId = getDoctorIdFromSession(req);
-        const today = toMidnight(new Date());
-        const tomorrow = new Date(today);
-        tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-        const sevenDaysLater = new Date(today);
-        sevenDaysLater.setUTCDate(sevenDaysLater.getUTCDate() + 7);
-        const startOfMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+        const { date_from, date_to, doctor_id } = req.query;
 
-        const appointmentScope = sessionDoctorId ? { doctor_id: sessionDoctorId } : {};
-        const patientScope = sessionDoctorId
-            ? {
-                patient_id: {
-                    $in: await Appointment.distinct('patient_id', { doctor_id: sessionDoctorId, is_deleted: false })
+        const filter = { is_deleted: false };
+        if (date_from || date_to) {
+            filter.appointment_date = {};
+            if (date_from) filter.appointment_date.$gte = toMidnight(date_from);
+            if (date_to) filter.appointment_date.$lte = toMidnight(new Date(new Date(date_to).getTime() + 86400000)); // End of day
+        } else {
+            const today = toMidnight(new Date());
+            const thirtyDaysAgo = new Date(today);
+            thirtyDaysAgo.setUTCDate(thirtyDaysAgo.getUTCDate() - 30);
+            filter.appointment_date = { $gte: thirtyDaysAgo, $lte: new Date(today.getTime() + 86400000) };
+        }
+
+        if (sessionDoctorId) {
+            filter.doctor_id = sessionDoctorId;
+        } else if (doctor_id) {
+            filter.doctor_id = doctor_id;
+        }
+
+        const statsAgg = await Appointment.aggregate([
+            { $match: filter },
+            {
+                $group: {
+                    _id: null,
+                    total_appointments: { $sum: 1 },
+                    completed: { $sum: { $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0] } },
+                    cancelled: { $sum: { $cond: [{ $eq: ["$status", "CANCELLED"] }, 1, 0] } },
+                    no_show: { $sum: { $cond: [{ $eq: ["$status", "NO_SHOW"] }, 1, 0] } },
+                    patients: { $addToSet: "$patient_id" }
                 }
             }
-            : {};
-
-        const [totalPatients, todayAppts, upcomingAppts, newThisMonth, doctorStats, statusBreakdown] = await Promise.all([
-            Patient.countDocuments({ is_deleted: false, ...patientScope }),
-            Appointment.countDocuments({ appointment_date: today, status: { $in: ['BOOKED', 'CONFIRMED'] }, ...appointmentScope }),
-            Appointment.countDocuments({ appointment_date: { $gte: tomorrow, $lte: sevenDaysLater }, status: { $in: ['BOOKED', 'CONFIRMED'] }, ...appointmentScope }),
-            Patient.countDocuments({ is_deleted: false, registered_at: { $gte: startOfMonth }, ...patientScope }),
-            Appointment.aggregate([
-                { $match: { appointment_date: { $gte: today, $lte: sevenDaysLater }, ...appointmentScope } },
-                { $group: { _id: '$doctor_name', count: { $sum: 1 } } }
-            ]),
-            Appointment.aggregate([
-                { $match: { appointment_date: today, ...appointmentScope } },
-                { $group: { _id: '$status', count: { $sum: 1 } } }
-            ])
         ]);
 
-        const doctorUtilization = {};
-        doctorStats.forEach(d => { if (d._id) doctorUtilization[d._id] = d.count; });
+        const stats = statsAgg[0] || { total_appointments: 0, completed: 0, cancelled: 0, no_show: 0, patients: [] };
 
-        const statusMap = {};
-        statusBreakdown.forEach(s => { if (s._id) statusMap[s._id.toLowerCase()] = s.count; });
+        const docVisitsAgg = await Appointment.aggregate([
+            { $match: filter },
+            { $group: { _id: "$doctor_name", count: { $sum: 1 } } },
+            { $sort: { count: -1 } }
+        ]);
+
+        const doctor_visits = docVisitsAgg.map(d => ({ name: d._id || 'Unassigned', count: d.count }));
+
+        const catAgg = await Appointment.aggregate([
+            { $match: filter },
+            { $group: { _id: "$visit_category", count: { $sum: 1 } } }
+        ]);
+
+        const categories = {};
+        catAgg.forEach(c => {
+            const catStr = c._id || 'General';
+            categories[catStr] = c.count;
+        });
+
+        // Weekly trends for last 30 days
+        const trendStart = filter.appointment_date.$gte || new Date(Date.now() - 30 * 86400000);
+        const trendsAgg = await Appointment.aggregate([
+            { $match: filter },
+            {
+                $group: {
+                    _id: { $floor: { $divide: [{ $subtract: ["$appointment_date", trendStart] }, 7 * 24 * 60 * 60 * 1000] } },
+                    count: { $sum: 1 }
+                }
+            },
+            { $sort: { "_id": 1 } }
+        ]);
+
+        const trends = [0, 0, 0, 0];
+        trendsAgg.forEach(t => {
+            if (t._id >= 0 && t._id < 4) {
+                trends[t._id] = t.count;
+            }
+        });
 
         res.json({
             success: true,
             data: {
-                total_patients: totalPatients,
-                appointments_today: todayAppts,
-                appointments_upcoming_7days: upcomingAppts,
-                new_registrations_this_month: newThisMonth,
-                today_status_breakdown: statusMap,
-                doctor_utilization: doctorUtilization
+                total_appointments: stats.total_appointments,
+                completed: stats.completed,
+                cancelled: stats.cancelled,
+                no_show: stats.no_show,
+                unique_patients: stats.patients.length,
+                doctor_visits,
+                categories,
+                trends
             }
         });
     } catch (err) {
@@ -92,14 +132,26 @@ router.get('/appointments', async (req, res) => {
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        const [appointments, statusSummary, total] = await Promise.all([
-            Appointment.find(filter).sort({ appointment_date: -1 }).skip(skip).limit(parseInt(limit)).lean(),
+        const [appointmentsData, statusSummary, total] = await Promise.all([
+            Appointment.find(filter).populate('patient_id', 'wa_id wa_hash email')
+                .sort({ appointment_date: -1 }).skip(skip).limit(parseInt(limit)).lean(),
             Appointment.aggregate([
                 { $match: filter },
                 { $group: { _id: '$status', count: { $sum: 1 } } }
             ]),
             Appointment.countDocuments(filter)
         ]);
+
+        // Map populated patient data to appointment objects
+        const appointments = appointmentsData.map(a => {
+            if (a.patient_id && typeof a.patient_id === 'object') {
+                const p = a.patient_id;
+                // Add decrypted/masked wa_id to appointment object
+                a.patient_mobile = p.wa_id ? require('../../utils/encryption').decrypt(p.wa_id) : null;
+                a.patient_id = p.patient_id || p._id;
+            }
+            return a;
+        });
 
         const summary = statusSummary.reduce((acc, s) => {
             acc[s._id?.toLowerCase() || 'unknown'] = s.count;
