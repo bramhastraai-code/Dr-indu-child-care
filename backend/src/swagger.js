@@ -86,6 +86,7 @@ const spec = {
         { name: 'MRD', description: 'Medical record documents' },
         { name: 'System', description: 'Health check, system config, and logs' },
         { name: 'Reports & Analytics', description: 'Dashboard stats and reporting' },
+        { name: 'Referring Doctors', description: 'Management of external doctors who refer patients' },
         { name: 'WhatsApp Bot Integration', description: 'Specialized tools for the bot flow' },
     ],
     paths: {
@@ -634,16 +635,51 @@ const spec = {
 
 
 
-        // ══ MESSAGING ═════════════════════════════════════════════════════════
+        // ══ MESSAGING (WhatsApp Notifications) ════════════════════════════════
         '/api/messages/doctor/late-alert': {
             post: {
-                tags: ['Messaging'], summary: 'Queue manual doctor late alerts',
-                requestBody: body({ doctor_name: 'Dr. Indu', minutes_late: 30, affected_appointments: [] }),
+                tags: ['Messaging'], summary: 'Trigger Doctor Late Alert',
+                requestBody: body({ doctor_id: 'DOC-00007', doctor_name: 'Dr. Indu', minutes_late: 30, notes: 'Traffic' }),
+                responses: { 200: { description: 'Queued' } }
+            }
+        },
+        '/api/messages/doctor/arrived-alert': {
+            post: {
+                tags: ['Messaging'], summary: 'Trigger Doctor Arrived Alert',
+                requestBody: body({ doctor_id: 'DOC-00007', doctor_name: 'Dr. Indu', arrival_time: '10:30 AM' }),
+                responses: { 200: { description: 'Queued' } }
+            }
+        },
+        '/api/messages/appointment/reschedule-notification': {
+            post: {
+                tags: ['Messaging'], summary: 'Send Reschedule Notification',
+                requestBody: body({ appointment_id: 'APT-1', old_date: '2026-03-07', new_date: '2026-03-08' }),
+                responses: { 200: { description: 'Queued' } }
+            }
+        },
+        '/api/messages/appointment/completion-notice': {
+            post: {
+                tags: ['Messaging'], summary: 'Send Visit Completion / Prescription Link',
+                requestBody: body({ appointment_id: 'APT-1', patient_id: 'P1', prescription_url: '...' }),
+                responses: { 200: { description: 'Queued' } }
+            }
+        },
+        '/api/messages/token/call-reminder': {
+            post: {
+                tags: ['Messaging'], summary: 'Send Token Call Reminder',
+                description: 'Sends a "You are next" or "Your turn" message to the patient.',
+                requestBody: body({ appointment_id: 'APT-1', token_number: 15, current_token: 13 }),
                 responses: { 200: { description: 'Queued' } }
             }
         },
         '/api/messages/messages/pending': {
             get: { tags: ['Messaging'], summary: 'Poll pending messages for external sender (n8n/WATI)', responses: { 200: { description: 'List of formatted messages' } } }
+        },
+        '/api/messages/messages/status/{message_id}': {
+            get: { tags: ['Messaging'], summary: 'Get single message status', parameters: [pathParam('message_id', 'MQ-123')], responses: { 200: { description: 'Success' } } }
+        },
+        '/api/messages/messages/batch/{batch_id}': {
+            get: { tags: ['Messaging'], summary: 'Get batch delivery status', parameters: [pathParam('batch_id', 'BATCH-001')], responses: { 200: { description: 'Success' } } }
         },
         '/api/messages/messages/{queue_id}/status': {
             patch: { tags: ['Messaging'], summary: 'Update delivery status from external sender (n8n/WATI)', parameters: [pathParam('queue_id', 'MQ-123')], requestBody: body({ status: 'SENT' }), responses: { 200: { description: 'Updated' } } }
@@ -862,6 +898,63 @@ const spec = {
             }
         },
 
+        // ══ ANALYTICS ═════════════════════════════════════════════════════════
+        '/api/analytics/appointments': {
+            get: {
+                tags: ['Reports & Analytics'],
+                summary: 'Appointment analytics',
+                parameters: [
+                    queryParam('from_date', '2026-01-01'),
+                    queryParam('to_date', '2026-12-31'),
+                    queryParam('doctor_id', ''),
+                    queryParam('visit_category', '')
+                ],
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+        '/api/analytics/tokens': {
+            get: {
+                tags: ['Reports & Analytics'],
+                summary: 'Token analytics',
+                parameters: [
+                    queryParam('from_date', '2026-01-01'),
+                    queryParam('to_date', '2026-12-31'),
+                    queryParam('doctor_id', '')
+                ],
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+        '/api/analytics/registrations': {
+            get: {
+                tags: ['Reports & Analytics'],
+                summary: 'Registration analytics',
+                parameters: [
+                    queryParam('from_date', '2026-01-01'),
+                    queryParam('to_date', '2026-12-31')
+                ],
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+        '/api/analytics/feedback': {
+            get: {
+                tags: ['Reports & Analytics'],
+                summary: 'Feedback analytics',
+                parameters: [
+                    queryParam('from_date', '2026-01-01'),
+                    queryParam('to_date', '2026-12-31'),
+                    queryParam('doctor_id', '')
+                ],
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+        '/api/analytics/practice-insights': {
+            get: {
+                tags: ['Reports & Analytics'],
+                summary: 'Practice insights (Unified)',
+                responses: { 200: { description: 'Success' } }
+            }
+        },
+
         // ══ TOKEN CONFIG ═══════════════════════════════════════════════════════
         '/api/token-config/{doctor_id}': {
             get: {
@@ -960,6 +1053,32 @@ const spec = {
                     }
                 }
             }
+        },
+
+        // ══ REFERRING DOCTORS ════════════════════════════════════════════════
+        '/api/referring-doctors': {
+            get: {
+                tags: ['Referring Doctors'], summary: 'List all referring doctors',
+                responses: { 200: { description: 'Success' } }
+            },
+            post: {
+                tags: ['Referring Doctors'], summary: 'Create a referring doctor',
+                requestBody: body({ name: 'Dr. Rahul Verma', clinic_name: 'Verma Clinic', specialisation: 'General Physician', mobile: '9876543210' }),
+                responses: { 201: { description: 'Created' } }
+            }
+        },
+        '/api/referring-doctors/{id}': {
+            get: { tags: ['Referring Doctors'], summary: 'Get doctor details', parameters: [pathParam('id', 'RD-001')], responses: { 200: { description: 'Success' } } },
+            patch: {
+                tags: ['Referring Doctors'], summary: 'Update doctor details',
+                parameters: [pathParam('id', 'RD-001')],
+                requestBody: body({ name: 'Dr. Rahul Verma (Updated)', mobile: '9123456789' }, false),
+                responses: { 200: { description: 'Updated' } }
+            },
+            delete: { tags: ['Referring Doctors'], summary: 'Delete doctor', parameters: [pathParam('id', 'RD-001')], responses: { 200: { description: 'Deleted' } } }
+        },
+        '/api/referring-doctors/{id}/report': {
+            get: { tags: ['Referring Doctors'], summary: 'Get referral report', parameters: [pathParam('id', 'RD-001')], responses: { 200: { description: 'Report stats' } } }
         }
     }
 };
