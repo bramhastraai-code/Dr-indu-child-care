@@ -217,8 +217,17 @@ exports.updateAvailability = async (req, res) => {
 exports.updateAvailabilityStatus = async (req, res) => {
     try {
         const { doctor_id } = req.params;
-        const { status, notes } = req.body || {};
-        if (!status) return res.status(400).json({ success: false, message: 'status is required' });
+        let { status, notes } = req.body || {};
+
+        // Robust handling if Frontend accidentally sends { status: { status: '...' } }
+        if (status && typeof status === 'object' && status.status) {
+            if (notes === undefined && status.notes !== undefined) notes = status.notes;
+            status = status.status;
+        }
+
+        if (!status || typeof status !== 'string') {
+            return res.status(400).json({ success: false, message: 'valid string status is required' });
+        }
 
         const doctor = await Doctor.findOne({ doctor_id });
         if (!doctor) return res.status(404).json({ success: false, message: 'Doctor not found' });

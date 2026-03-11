@@ -45,7 +45,17 @@ const getDoctorShiftConfig = async (doctorId, date) => {
 
         // 2. Check weekly config
         const dayConfig = config.weekly_config[dayOfWeek];
-        if (dayConfig && dayConfig.is_active) {
+        if (dayConfig) {
+            if (dayConfig.is_active === false) {
+                return {
+                    total: 0,
+                    online: 0,
+                    walkin: 0,
+                    start_time: dayConfig.start_time,
+                    is_holiday: true,
+                    message: 'Clinician is offline on this day'
+                };
+            }
             const online = dayConfig.online_limit || 20;
             return {
                 total: online + 999,

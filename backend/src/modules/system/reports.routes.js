@@ -142,12 +142,14 @@ router.get('/appointments', async (req, res) => {
             Appointment.countDocuments(filter)
         ]);
 
+        const isSuperadmin = req.user?.role === 'superadmin';
+
         // Map populated patient data to appointment objects
         const appointments = appointmentsData.map(a => {
             if (a.patient_id && typeof a.patient_id === 'object') {
                 const p = a.patient_id;
-                // Add decrypted/masked wa_id to appointment object
-                a.patient_mobile = p.wa_id ? require('../../utils/encryption').decrypt(p.wa_id) : null;
+                // Add decrypted/masked wa_id to appointment object only if superadmin
+                a.patient_mobile = (isSuperadmin && p.wa_id) ? require('../../utils/encryption').decrypt(p.wa_id) : '***';
                 a.patient_id = p.patient_id || p._id;
             }
             return a;
