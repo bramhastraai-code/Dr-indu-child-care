@@ -145,6 +145,8 @@ exports.registerPatient = async (req, res, next) => {
             city,
             pincode,
             residential_address,
+            enrollment_option,
+            send_to_specific,
         } = req.body || {};
 
         // 1. Resolve Child Name (Combine parts if missing)
