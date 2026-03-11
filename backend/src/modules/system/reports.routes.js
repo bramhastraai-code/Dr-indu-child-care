@@ -133,7 +133,7 @@ router.get('/appointments', async (req, res) => {
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         const [appointmentsData, statusSummary, total] = await Promise.all([
-            Appointment.find(filter).populate('patient_id', 'wa_id wa_hash email')
+            Appointment.find(filter)
                 .sort({ appointment_date: -1 }).skip(skip).limit(parseInt(limit)).lean(),
             Appointment.aggregate([
                 { $match: filter },
@@ -142,15 +142,27 @@ router.get('/appointments', async (req, res) => {
             Appointment.countDocuments(filter)
         ]);
 
+        // Manual populate for patient data (avoiding ObjectId cast errors with string patient_ids)
+        const patientIds = appointmentsData.map(a => a.patient_id).filter(Boolean);
+        const patients = await Patient.find({ patient_id: { $in: patientIds } }, 'patient_id wa_id wa_hash email').lean();
+        const patientMap = patients.reduce((acc, p) => {
+            acc[p.patient_id] = p;
+            return acc;
+        }, {});
+
         const isSuperadmin = req.user?.role === 'superadmin';
 
         // Map populated patient data to appointment objects
         const appointments = appointmentsData.map(a => {
-            if (a.patient_id && typeof a.patient_id === 'object') {
-                const p = a.patient_id;
+            const p = patientMap[a.patient_id];
+            if (p) {
                 // Add decrypted/masked wa_id to appointment object only if superadmin
+                // Note: using lean(), so we must decrypt manually
                 a.patient_mobile = (isSuperadmin && p.wa_id) ? require('../../utils/encryption').decrypt(p.wa_id) : '***';
-                a.patient_id = p.patient_id || p._id;
+                a.patient_data = {
+                    email: p.email ? require('../../utils/encryption').decrypt(p.email) : null,
+                    wa_id: p.wa_id ? require('../../utils/encryption').decrypt(p.wa_id) : null
+                };
             }
             return a;
         });

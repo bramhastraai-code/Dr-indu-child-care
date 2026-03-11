@@ -9,7 +9,6 @@ const AppointmentSchema = new mongoose.Schema({
     },
     patient_id: {
         type: String,
-        ref: 'Patient',
         required: true,
         index: true
     },
