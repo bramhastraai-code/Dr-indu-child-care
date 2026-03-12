@@ -16,18 +16,28 @@ const REPORT_ROLES = ['superadmin', 'admin', 'staff', 'secretary', 'doctor'];
 router.get('/dashboard', async (req, res) => {
     try {
         const sessionDoctorId = getDoctorIdFromSession(req);
-        const { date_from, date_to, doctor_id } = req.query;
+        // Support both styles of date parameters
+        const dateFromRaw = req.query.date_from || req.query.from;
+        const dateToRaw = req.query.date_to || req.query.to;
+        const { doctor_id } = req.query;
 
         const filter = { is_deleted: false };
-        if (date_from || date_to) {
+        if (dateFromRaw || dateToRaw) {
             filter.appointment_date = {};
-            if (date_from) filter.appointment_date.$gte = toMidnight(date_from);
-            if (date_to) filter.appointment_date.$lte = toMidnight(new Date(new Date(date_to).getTime() + 86400000)); // End of day
+            if (dateFromRaw) filter.appointment_date.$gte = toMidnight(dateFromRaw);
+            if (dateToRaw) {
+                const dto = new Date(dateToRaw);
+                dto.setUTCHours(23, 59, 59, 999);
+                filter.appointment_date.$lte = dto;
+            }
         } else {
+            // Default to last 30 days
             const today = toMidnight(new Date());
             const thirtyDaysAgo = new Date(today);
             thirtyDaysAgo.setUTCDate(thirtyDaysAgo.getUTCDate() - 30);
-            filter.appointment_date = { $gte: thirtyDaysAgo, $lte: new Date(today.getTime() + 86400000) };
+            const endOfToday = new Date(today);
+            endOfToday.setUTCHours(23, 59, 59, 999);
+            filter.appointment_date = { $gte: thirtyDaysAgo, $lte: endOfToday };
         }
 
         if (sessionDoctorId) {
@@ -71,25 +81,22 @@ router.get('/dashboard', async (req, res) => {
             categories[catStr] = c.count;
         });
 
-        // Weekly trends for last 30 days
-        const trendStart = filter.appointment_date.$gte || new Date(Date.now() - 30 * 86400000);
+        // Daily trends for the selected range
         const trendsAgg = await Appointment.aggregate([
             { $match: filter },
             {
                 $group: {
-                    _id: { $floor: { $divide: [{ $subtract: ["$appointment_date", trendStart] }, 7 * 24 * 60 * 60 * 1000] } },
+                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$appointment_date" } },
                     count: { $sum: 1 }
                 }
             },
             { $sort: { "_id": 1 } }
         ]);
 
-        const trends = [0, 0, 0, 0];
-        trendsAgg.forEach(t => {
-            if (t._id >= 0 && t._id < 4) {
-                trends[t._id] = t.count;
-            }
-        });
+        const trends = trendsAgg.map(t => ({
+            date: t._id,
+            count: t.count
+        }));
 
         res.json({
             success: true,
@@ -113,13 +120,20 @@ router.get('/dashboard', async (req, res) => {
 router.get('/appointments', async (req, res) => {
     try {
         const sessionDoctorId = getDoctorIdFromSession(req);
-        const { date_from, date_to, doctor_id, doctor_name, status, booking_source, page = 1, limit = 100 } = req.query;
+        // Support both styles of date parameters
+        const dateFromRaw = req.query.date_from || req.query.from;
+        const dateToRaw = req.query.date_to || req.query.to;
+        const { doctor_id, doctor_name, status, booking_source, page = 1, limit = 100 } = req.query;
 
-        const filter = {};
-        if (date_from || date_to) {
+        const filter = { is_deleted: false };
+        if (dateFromRaw || dateToRaw) {
             filter.appointment_date = {};
-            if (date_from) filter.appointment_date.$gte = toMidnight(date_from);
-            if (date_to) filter.appointment_date.$lte = toMidnight(date_to);
+            if (dateFromRaw) filter.appointment_date.$gte = toMidnight(dateFromRaw);
+            if (dateToRaw) {
+                const dto = new Date(dateToRaw);
+                dto.setUTCHours(23, 59, 59, 999);
+                filter.appointment_date.$lte = dto;
+            }
         }
         if (sessionDoctorId) {
             filter.doctor_id = sessionDoctorId;
