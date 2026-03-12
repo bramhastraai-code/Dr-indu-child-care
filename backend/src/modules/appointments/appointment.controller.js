@@ -298,7 +298,7 @@ const enrichAppointment = async (a) => {
 
 // ── 1. GET /api/appointments ─────────────────────────────────────────────────
 // List appointments with filters: date, patient_id, status, source, page, limit
-exports.getAppointments = async (req, res) => {
+exports.getAppointments = async (req, res, next) => {
     try {
         const { date, patient_id, doctor_id, doctor_name, status, source, page = 1, limit = 50 } = req.query;
         if (!ensureDoctorSessionHasProfile(req, res)) return;
@@ -589,7 +589,7 @@ exports.createAppointment = async (req, res, next) => {
 
 // ── 3. GET /api/appointments/stats ───────────────────────────────────────────
 // Dashboard stats: totals by status and booking_source for today or a given date
-exports.getAppointmentStats = async (req, res) => {
+exports.getAppointmentStats = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -637,7 +637,7 @@ exports.getAppointmentStats = async (req, res) => {
 };
 
 // ── 5. GET /api/appointments/:appointment_id ─────────────────────────────────
-exports.getAppointmentById = async (req, res) => {
+exports.getAppointmentById = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -653,7 +653,7 @@ exports.getAppointmentById = async (req, res) => {
 
 // ── 6. PATCH /api/appointments/:appointment_id ───────────────────────────────
 // Reschedule or update appointment (date, reason, doctor)
-exports.updateAppointment = async (req, res) => {
+exports.updateAppointment = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -774,7 +774,7 @@ exports.updateAppointment = async (req, res) => {
 
 // ── 7. PATCH /api/appointments/:appointment_id/cancel ────────────────────────
 // Cancel by bot or dashboard — same endpoint, cancelled_by field tracks who
-exports.cancelAppointment = async (req, res) => {
+exports.cancelAppointment = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 

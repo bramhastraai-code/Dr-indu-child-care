@@ -500,7 +500,21 @@ exports.getPatients = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
-        let { page = 1, limit = 20, search, source, status, gender, doctor } = req.query;
+        let { 
+            page = 1, 
+            limit = 20, 
+            search, 
+            source, 
+            status, 
+            gender, 
+            doctor, 
+            city, 
+            state,
+            from,
+            to,
+            date_from,
+            date_to
+        } = req.query;
         page = parseInt(page, 10);
         limit = parseInt(limit, 10);
         const skip = (page - 1) * limit;
@@ -516,6 +530,15 @@ exports.getPatients = async (req, res, next) => {
         if (doctor) query.doctor = new RegExp(doctor, 'i');
         if (city) query.city = new RegExp(city, 'i');
         if (state) query.state = new RegExp(state, 'i');
+
+        // Date range filter
+        const final_from = from || date_from;
+        const final_to = to || date_to;
+        if (final_from || final_to) {
+            query.registered_at = {};
+            if (final_from) query.registered_at.$gte = new Date(final_from);
+            if (final_to) query.registered_at.$lte = new Date(final_to);
+        }
 
         if (search) {
             const searchHash = hashField(normalizePhone(search));

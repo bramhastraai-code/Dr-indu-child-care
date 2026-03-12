@@ -59,7 +59,7 @@ const scopeEntriesForDoctor = async (req, entries = []) => {
 
 // @desc    Get full MRD
 // @route   GET /api/mrd/:patient_id
-exports.getMRDByPatientId = async (req, res) => {
+exports.getMRDByPatientId = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
         if (!await ensureDoctorCanAccessPatient(req, res, req.params.patient_id, 'You can only view MRD for patients linked to your profile')) return;
@@ -123,7 +123,7 @@ exports.getMRDByPatientId = async (req, res) => {
 
 // @desc    Add clinical entry
 // @route   POST /api/mrd/entry
-exports.addMRDEntry = async (req, res) => {
+exports.addMRDEntry = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -240,7 +240,7 @@ exports.addMRDEntry = async (req, res) => {
 
 // @desc    Get MRD entry by appointment ID
 // @route   GET /api/mrd/appointment/:appointment_id
-exports.getEntryByAppointment = async (req, res) => {
+exports.getEntryByAppointment = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -264,7 +264,7 @@ exports.getEntryByAppointment = async (req, res) => {
 
 // @desc    Update entry
 // @route   PATCH /api/mrd/entry/:id
-exports.updateMRDEntry = async (req, res) => {
+exports.updateMRDEntry = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -313,7 +313,7 @@ exports.updateMRDEntry = async (req, res) => {
 
 // @desc    Export structured data
 // @route   GET /api/mrd/:patient_id/export
-exports.exportMRD = async (req, res) => {
+exports.exportMRD = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -367,7 +367,7 @@ exports.updateMRDById = async (req, res) => {
 
 // @desc    Add vaccination record
 // @route   POST /api/mrd/vaccination
-exports.addVaccinationRecord = async (req, res) => {
+exports.addVaccinationRecord = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -427,7 +427,7 @@ exports.addVaccinationRecord = async (req, res) => {
 
 // @desc    Lock MRD entry
 // @route   PATCH /api/mrd/entry/:id/lock
-exports.lockMRDEntry = async (req, res) => {
+exports.lockMRDEntry = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -456,7 +456,7 @@ exports.lockMRDEntry = async (req, res) => {
 
 // @desc    Upload attachment to MRD entry
 // @route   POST /api/mrd/entry/:id/attachment
-exports.uploadMRDAttachment = async (req, res) => {
+exports.uploadMRDAttachment = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
@@ -505,7 +505,7 @@ exports.uploadMRDAttachment = async (req, res) => {
 
 // @desc    Send prescription via WhatsApp
 // @route   POST /api/mrd/entry/:id/send-whatsapp
-exports.sendPrescriptionViaWhatsApp = async (req, res) => {
+exports.sendPrescriptionViaWhatsApp = async (req, res, next) => {
     try {
         const { id } = req.params;
         const mrd = await MRD.findOne({ 'entries._id': id });
