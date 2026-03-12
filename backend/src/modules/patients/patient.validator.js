@@ -74,6 +74,7 @@ const basePatientFields = {
     city: optionalStr().max(100),
     pincode: optionalStr().max(20),
     residential_address: optionalStr().max(500),
+    address: optionalStr().max(500), // Added alias for residential_address
 };
 
 const registerSchema = Joi.object({

@@ -209,6 +209,7 @@ const spec = {
                     email: 'rohit@example.com',
                     communication_preference: 'whatsapp',
                     doctor: 'Dr. Indu',
+                    address: '123 Healthway Clinic Road, Mumbai',
                     remarks: 'New patient from campaign',
                     registration_source: 'dashboard',
                     enrollment_option: 'just_enroll'
@@ -232,6 +233,7 @@ const spec = {
                     email: 'rohit@example.com',
                     communication_preference: 'whatsapp',
                     doctor: 'Dr. Indu',
+                    address: '123 Healthway Clinic Road, Mumbai',
                     remarks: 'New patient from campaign',
                     registration_source: 'form',
                     enrollment_option: 'just_enroll'

@@ -145,6 +145,7 @@ exports.registerPatient = async (req, res, next) => {
             city,
             pincode,
             residential_address,
+            address, // alias for residential_address
             enrollment_option,
             send_to_specific,
         } = req.body || {};
@@ -274,7 +275,7 @@ exports.registerPatient = async (req, res, next) => {
             state: state || 'Maharashtra',
             city: city || 'Mumbai',
             pincode: pincode || null,
-            residential_address: residential_address || null
+            residential_address: residential_address || address || null
         });
 
         // Create blank MRD shell
@@ -576,6 +577,11 @@ exports.updatePatient = async (req, res, next) => {
                 });
             }
             updates.gender = normalizedUpdateGender;
+        }
+
+        if (updates.address) {
+            updates.residential_address = updates.address;
+            delete updates.address;
         }
 
         // Protect immutable fields
