@@ -20,8 +20,6 @@ const {
     updateMessage,
     getDoctorsMinimal,
     getDoctorAvailabilityBot,
-    getAvailableSlotsBot,
-    getAvailableDatesBot,
     getAppointmentsByWaBot,
     getTokenStatusBot
 } = require('./bot.controller');
