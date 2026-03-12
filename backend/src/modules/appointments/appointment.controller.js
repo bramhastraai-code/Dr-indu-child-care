@@ -681,8 +681,21 @@ exports.updateAppointment = async (req, res) => {
         // Handle core schedule change
         if (appointment_date || doctor_id || doctor_name) {
             const newDate = appointment_date ? toMidnight(appointment_date) : appt.appointment_date;
+            const targetDocId = scopedDoctorId || appt.doctor_id;
+            
+            // NEW: Schedule / Holiday Validation during Reschedule
+            if (appointment_date) {
+                const shift = await getDoctorShiftConfig(targetDocId, newDate);
+                if (shift.is_holiday) {
+                    return res.status(400).json({ 
+                        success: false, 
+                        message: `Doctor is not available on ${newDate.toISOString().split('T')[0]} (Holiday/Off).` 
+                    });
+                }
+            }
+
             const { finalId: newDocId, finalName: newDocName, finalSpeciality: newDocSpeciality } = await resolveDoctorDetails({
-                doctor_id: scopedDoctorId || appt.doctor_id,
+                doctor_id: targetDocId,
                 doctor_name: scopedDoctorName || appt.doctor_name,
                 doctor_speciality: doctor_speciality || appt.doctor_speciality
             });
@@ -699,9 +712,8 @@ exports.updateAppointment = async (req, res) => {
                 // Recalculate tokens on schedule change
                 const shift = await getDoctorShiftConfig(newDocId, newDate);
                 updates.appointment_time = shift.start_time;
-                updates.token_number = null; // Reset for new assignment logic
-                updates.token_display = null;
-                updates.token_status = 'PENDING';
+                // Note: Token number is often reset or preserved based on business rules.
+                // Keeping token_number preserved if not explicitly changed (per requirement description)
             }
         }
 
@@ -752,6 +764,7 @@ exports.updateAppointment = async (req, res) => {
         axios.post('https://n8n.brahmaastra.ai/webhook/appointment-upgradation', enriched)
             .catch(err => console.error('[updateAppointment] n8n webhook failed:', err.message));
 
+        // Returns full enriched object now
         res.json({ success: true, data: enriched });
     } catch (err) {
         next(err);
@@ -857,6 +870,60 @@ exports.getAppointmentsByWaId = async (req, res) => {
         });
     } catch (err) {
         console.error('[getAppointmentsByWaId]', err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// ── GET /api/appointments/lookup?query=... ──────────────────────────────────
+// Unified lookup: handles Appointment ID or patient Mobile/WA number.
+exports.lookupAppointments = async (req, res) => {
+    try {
+        const { query } = req.query;
+        if (!query) return res.status(400).json({ success: false, message: 'query parameter is required' });
+
+        const search = String(query).trim().toUpperCase();
+
+        // 1. Check if it's a direct Appointment ID (starts with APT-)
+        if (search.startsWith('APT-')) {
+            const appt = await Appointment.findOne({ appointment_id: search });
+            if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
+            const enriched = await enrichAppointment(appt);
+            return res.json({ success: true, type: 'single', data: enriched });
+        }
+
+        // 2. Otherwise treat as a Mobile/WhatsApp lookup
+        const normalized = normalizePhone(search.replace(/\D/g, ''));
+        const wa_hash = hashField(normalized);
+        const patient = await Patient.findOne({ wa_hash, is_deleted: false });
+
+        if (!patient) {
+            return res.status(404).json({ success: false, message: 'No patient found with this mobile number.' });
+        }
+
+        // Fetch upcoming appointments
+        const today = toMidnight(new Date());
+        const filter = {
+            patient_id: patient.patient_id,
+            appointment_date: { $gte: today },
+            status: { $in: ['BOOKED', 'CONFIRMED', 'PENDING', 'SCHEDULED'] },
+            is_deleted: false
+        };
+
+        const appointments = await Appointment.find(filter).sort({ appointment_date: 1, token_number: 1 });
+        const enriched = await Promise.all(appointments.map(enrichAppointment));
+
+        return res.json({
+            success: true,
+            type: 'list',
+            patient: {
+                patient_id: patient.patient_id,
+                child_name: patient.child_name,
+                mobile: patient.mobile || normalized
+            },
+            data: enriched
+        });
+    } catch (err) {
+        console.error('[lookupAppointments]', err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 };

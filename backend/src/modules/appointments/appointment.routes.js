@@ -49,6 +49,7 @@ const ADMIN_ONLY = ['superadmin', 'admin'];
 router.post('/form', validate(bookForm), bookByForm);
 router.post('/whatsapp', validate(bookWhatsapp), bookByWhatsapp);
 router.get('/by-wa/:wa_id', getAppointmentsByWaId);
+router.get('/lookup', lookupAppointments); // Unified search: ?query=...
 router.get('/tokens/available', getAvailableTokens);
 
 // ── Static routes (must come BEFORE /:appointment_id) ─────────────────
