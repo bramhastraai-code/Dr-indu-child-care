@@ -20,7 +20,8 @@ const {
     deleteAppointment,
     getAvailableTokens,
     checkInAppointment,
-    checkOutAppointment
+    checkOutAppointment,
+    lookupAppointments
 } = require('./appointment.controller');
 
 const {
