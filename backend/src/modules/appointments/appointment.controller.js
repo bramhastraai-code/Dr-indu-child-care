@@ -17,6 +17,7 @@ const {
 } = require('../../utils/doctorScope');
 const { queueMessage } = require('../../services/messageQueueService');
 const axios = require('axios');
+const { triggerWebhook } = require('../../services/webhookService');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -573,9 +574,8 @@ exports.createAppointment = async (req, res, next) => {
             token_status: 'WAITING'
         };
 
-        // Trigger n8n webhook
-        axios.post('https://n8n.brahmaastra.ai/webhook/appointment', responseData)
-            .catch(err => console.error('Appointment webhook failed:', err.message));
+        // Trigger n8n webhook (awaited for reliability, using TitleCase for consistency)
+        await triggerWebhook('Appointment', responseData);
 
         res.status(201).json({
             success: true,
@@ -761,8 +761,7 @@ exports.updateAppointment = async (req, res, next) => {
         const enriched = await enrichAppointment(updated);
 
         // Trigger n8n webhook for appointment modification
-        axios.post('https://n8n.brahmaastra.ai/webhook/appointment-upgradation', enriched)
-            .catch(err => console.error('[updateAppointment] n8n webhook failed:', err.message));
+        await triggerWebhook('Appointment-Upgradation', enriched);
 
         // Returns full enriched object now
         res.json({ success: true, data: enriched });

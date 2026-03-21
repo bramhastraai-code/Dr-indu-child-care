@@ -7,8 +7,10 @@ const WATI_BASE_URL = process.env.WATI_BASE_URL || 'https://live-server-116924.w
 const WATI_API_KEY = process.env.WATI_API_KEY;
 const WATI_PHONE_ID = process.env.WATI_PHONE_ID || '';
 
+const { triggerWebhook } = require('./webhookService');
+
 /**
- * Send a plain-text WhatsApp session message.
+ * Send a plain-text WhatsApp session message via n8n.
  * @param {string} waId  — 10-digit or 91XXXXXXXXXX number
  * @param {string} text  — message body
  * @returns {{ success, message_id, wa_id, status, error? }}
@@ -18,42 +20,27 @@ async function sendMessage(waId, text) {
     const normalized = String(waId).replace(/\D/g, '');
     const phone = normalized.length === 10 ? `91${normalized}` : normalized;
 
-    if (!WATI_API_KEY) {
-        // Dev mode — log and return a mock response
-        console.log(`[WATI-DEV] → ${phone}\n${text}\n${'─'.repeat(60)}`);
-        return {
-            success: true,
-            message_id: `mock-${Date.now()}`,
-            wa_id: phone,
-            status: 'sent'
-        };
-    }
-
     try {
-        const axios = require('axios');
-        const response = await axios.post(
-            `${WATI_BASE_URL}/sendSessionMessage/${phone}`,
-            { messageText: text },
-            {
-                headers: {
-                    Authorization: `Bearer ${WATI_API_KEY}`,
-                    'Content-Type': 'application/json'
-                },
-                timeout: 10000
-            }
-        );
-
-        const data = response.data || {};
-        return {
-            success: true,
-            message_id: data.id || data.messageId || `WATI-${Date.now()}`,
+        // We trigger an n8n webhook for outgoing messages instead of calling WATI directly
+        const result = await triggerWebhook('wa-message', {
             wa_id: phone,
-            status: 'sent'
-        };
+            text: text,
+            sent_at: new Date().toISOString()
+        });
+
+        if (result.success) {
+            return {
+                success: true,
+                message_id: `n8n-${Date.now()}`,
+                wa_id: phone,
+                status: 'sent'
+            };
+        } else {
+            return { success: false, error: result.error, wa_id: phone };
+        }
     } catch (err) {
-        const errorMsg = err.response?.data?.message || err.message;
-        console.error(`[WATI] Send failed to ${phone}:`, errorMsg);
-        return { success: false, error: errorMsg, wa_id: phone };
+        console.error(`[n8n-WA] Webhook failed to ${phone}:`, err.message);
+        return { success: false, error: err.message, wa_id: phone };
     }
 }
 

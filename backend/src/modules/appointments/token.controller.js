@@ -12,6 +12,7 @@ const {
     ensureDoctorMatches
 } = require('../../utils/doctorScope');
 const { getDoctorShiftConfig } = require('../../utils/tokenHelpers');
+const { triggerWebhook } = require('../../services/webhookService');
 
 // Helper: Update doctor consultation rolling average
 const updateDoctorConsultationStats = async (doctor_id, durationMinutes) => {
@@ -717,7 +718,6 @@ exports.notifyDelay = async (req, res) => {
 
         const { queueMessage, newBatchId } = require('../../services/messageQueueService');
         const batchId = newBatchId();
-        const axios = require('axios');
 
         let count = 0;
         for (const appt of appointments) {
@@ -752,7 +752,7 @@ exports.notifyDelay = async (req, res) => {
             }, { batchId, relatedEntity: { appointment_id: appt.appointment_id } });
 
             // Trigger n8n webhook for Doctor late delay
-            axios.post('https://n8n.brahmaastra.ai/webhook/Doctor-update', {
+            await triggerWebhook('Doctor-Update', {
                 mobile: wa_id, // Combine wa_id/mobile as just "mobile"
                 patient_name: patient.child_name || 'Patient',
                 parent_name: patient.father_name || patient.mother_name || 'Parent',
@@ -762,7 +762,7 @@ exports.notifyDelay = async (req, res) => {
                 new_time: newTimeStr,
                 token_number: appt.token_number,
                 appointment_date: queryDate.toISOString().split('T')[0]
-            }).catch(err => console.error('[notifyDelay n8n] webhook failed:', err.message));
+            });
 
             count++;
         }

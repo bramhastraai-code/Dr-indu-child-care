@@ -3,7 +3,7 @@ const Appointment = require('../models/Appointment');
 const Patient = require('../models/Patient');
 const { assignTokensForDate } = require('../modules/appointments/appointment.controller');
 const { toMidnight } = require('../utils/helpers');
-const axios = require('axios');
+const { triggerWebhook } = require('./webhookService');
 const { startQueueProcessor } = require('./messageQueueService');
 
 function initCronJobs() {
@@ -68,9 +68,8 @@ function initCronJobs() {
                     event_type: 'APPOINTMENT_REMINDER_24H'
                 };
                 
-                // Fire and forget
-                axios.post('https://n8n.brahmaastra.ai/webhook/24hr-message', payload)
-                    .catch(err => console.error(`[CRON] Webhook failed for ${appt.appointment_id}:`, err.message));
+                // Wait for n8n to receive reminder
+                await triggerWebhook('24hr-Message', payload);
             }
 
             console.log(`[CRON] Successfully processed ${appointments.length} daily 24h reminders.`);

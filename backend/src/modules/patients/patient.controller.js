@@ -7,6 +7,7 @@ const { normalizePhone, normalizeWaId, normalizeGender } = require('../../utils/
 const { hashField, decrypt } = require('../../utils/encryption');
 const { getDoctorIdFromSession, ensureDoctorSessionHasProfile } = require('../../utils/doctorScope');
 const { generatePatientKey } = require('../../utils/patientKey');
+const { triggerWebhook } = require('../../services/webhookService');
 
 // Helper: parse DD/MM/YYYY or YYYY-MM-DD to Date
 const parseDOB = (raw) => {
@@ -299,19 +300,15 @@ exports.registerPatient = async (req, res, next) => {
             meta: { child_name, registration_source }
         });
 
-        // Trigger n8n webhook (using native fetch instead of axios)
-        fetch('https://n8n.brahmaastra.ai/webhook/Registration', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                patient_id,
-                child_name: final_child_name,
-                wa_id: final_wa_id,
-                email,
-                doctor,
-                registration_source: (registration_source || 'dashboard').toLowerCase()
-            })
-        }).catch(err => console.error('Registration webhook failed:', err.message));
+        // Trigger n8n webhook (awaited for reliability)
+        await triggerWebhook('Registration', {
+            patient_id,
+            child_name: final_child_name,
+            wa_id: final_wa_id,
+            email,
+            doctor,
+            registration_source: (registration_source || 'dashboard').toLowerCase()
+        });
 
         res.status(201).json({ success: true, data: patient });
 
