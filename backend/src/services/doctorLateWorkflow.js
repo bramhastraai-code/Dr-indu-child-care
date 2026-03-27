@@ -16,7 +16,7 @@ const Appointment = require('../models/Appointment');
 const Patient = require('../models/Patient');
 const { decrypt } = require('../utils/encryption');
 const { toMidnight } = require('../utils/helpers');
-const { queueMessage, newBatchId } = require('./messageQueueService');
+const { triggerWebhook } = require('./webhookService');
 const audit = require('../utils/audit');
 
 // Helper: add minutes to a "HH:MM" string → "HH:MM"
@@ -51,7 +51,7 @@ async function handleDoctorLate(doctorId, doctorName, minutesLate, etaTime) {
     console.log(`[DoctorLate] Starting for ${doctorName} (${doctorId}), minutes: ${minutesLate}`);
     const today = toMidnight(new Date());
 
-    const batchId = newBatchId();
+    const batchId = `BATCH-${new Date().getFullYear()}-${Date.now().toString(36).toUpperCase()}`;
     const CLINIC_NAME = process.env.CLINIC_NAME || 'Dr. Indu Child Care Clinic';
     const CLINIC_ADDRESS = process.env.CLINIC_ADDRESS || 'Dr. Indu Child Care Clinic';
 
@@ -121,17 +121,21 @@ async function handleDoctorLate(doctorId, doctorName, minutesLate, etaTime) {
             clinic_address: CLINIC_ADDRESS
         };
 
-        const relatedEntity = { entity_type: 'appointment', entity_id: appt.appointment_id };
-
-        // Queue: Doctor Running Late alert (immediate)
-        await queueMessage(waId, 'DOCTOR_RUNNING_LATE', vars, { batchId, relatedEntity });
-        messagesQueued++;
-
-        // Queue: Appointment Rescheduled confirmation (delayed 45s)
-        await queueMessage(waId, 'APPOINTMENT_RESCHEDULED', vars, {
-            batchId,
-            relatedEntity,
-            scheduledFor: new Date(Date.now() + 45 * 1000)
+        // Trigger n8n webhook for Doctor late delay (using lowercase for consistency)
+        await triggerWebhook('doctor-update', {
+            batch_id: batchId,
+            parent_wa_id: waId,
+            parent_name: parentName,
+            child_name: childName,
+            doctor_name: doctorName,
+            delay_minutes: minutesLate,
+            original_time: to12h(originalTime),
+            new_time: etaTime || to12h(newTime),
+            token: token,
+            appointment_id: appt.appointment_id,
+            clinic_name: CLINIC_NAME,
+            clinic_address: CLINIC_ADDRESS,
+            event_type: 'DOCTOR_RUNNING_LATE'
         });
         messagesQueued++;
 
@@ -166,7 +170,7 @@ async function handleDoctorLate(doctorId, doctorName, minutesLate, etaTime) {
  */
 async function handleDoctorArrived(doctorId, doctorName) {
     const today = toMidnight(new Date());
-    const batchId = newBatchId();
+    const batchId = `BATCH-${new Date().getFullYear()}-${Date.now().toString(36).toUpperCase()}`;
     const CLINIC_NAME = process.env.CLINIC_NAME || 'Dr. Indu Child Care Clinic';
     const CLINIC_ADDRESS = process.env.CLINIC_ADDRESS || 'Dr. Indu Child Care Clinic';
 
@@ -197,14 +201,19 @@ async function handleDoctorArrived(doctorId, doctorName) {
         if (!waId) continue;
 
         const token = appt.token_number ? `Token #${appt.token_number}` : appt.appointment_id;
-        await queueMessage(waId, 'DOCTOR_ARRIVED', {
+        
+        // Trigger n8n webhook for Doctor Arrived
+        await triggerWebhook('doctor-update', {
+            batch_id: batchId,
+            parent_wa_id: waId,
             parent_name: patient.parent_name || patient.father_name || patient.mother_name || 'Parent',
             doctor_name: doctorName,
             token,
             appointment_time: to12h(appt.appointment_time),
             clinic_name: CLINIC_NAME,
-            clinic_address: CLINIC_ADDRESS
-        }, { batchId, relatedEntity: { entity_type: 'appointment', entity_id: appt.appointment_id } });
+            clinic_address: CLINIC_ADDRESS,
+            event_type: 'DOCTOR_ARRIVED'
+        });
         queued++;
     }
 

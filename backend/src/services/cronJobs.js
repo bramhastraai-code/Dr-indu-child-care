@@ -4,13 +4,10 @@ const Patient = require('../models/Patient');
 const { assignTokensForDate } = require('../modules/appointments/appointment.controller');
 const { toMidnight } = require('../utils/helpers');
 const { triggerWebhook } = require('./webhookService');
-const { startQueueProcessor } = require('./messageQueueService');
+
 
 function initCronJobs() {
-    // 1. Start the simple message queue processor built-in
-    startQueueProcessor();
-
-    // 2. Daily Cron Job to run the 24hr reminders automatically
+    // Daily Cron Job to run the 24hr reminders automatically
     // Currently set to run every day at 08:00 AM server time
     // cron syntax: minute(0-59) hour(0-23) dayOfMonth(1-31) month(1-12) dayOfWeek(0-7)
     cron.schedule('0 8 * * *', async () => {
@@ -68,8 +65,8 @@ function initCronJobs() {
                     event_type: 'APPOINTMENT_REMINDER_24H'
                 };
                 
-                // Wait for n8n to receive reminder
-                await triggerWebhook('24hr-Message', payload);
+                // Wait for n8n to receive reminder (using lowercase as expected)
+                await triggerWebhook('24hr-message', payload);
             }
 
             console.log(`[CRON] Successfully processed ${appointments.length} daily 24h reminders.`);

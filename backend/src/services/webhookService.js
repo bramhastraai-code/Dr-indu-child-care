@@ -52,7 +52,7 @@ const triggerWebhook = async (endpoint, data) => {
             timeout: 10000 // 10s timeout
         });
         
-        if (NODE_ENV === 'development') {
+        if (process.env.NODE_ENV === 'development') {
             console.log(`[Webhook] Success: ${url} (Status: ${response.status})`);
         }
         

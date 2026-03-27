@@ -8,9 +8,9 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "author": "Deepak Santosh Dukare",
+  "license": "MIT",
+  "description": "Dr. Indu Child Care Backend API",
   "engines": {
     "node": ">=18.0.0"
   },

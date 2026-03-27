@@ -9,7 +9,7 @@ const {
     ensureDoctorMatches
 } = require('../../utils/doctorScope');
 
-const { queueMessage } = require('../../services/messageQueueService');
+const { triggerWebhook } = require('../../services/webhookService');
 
 const ensureDoctorCanAccessPatient = async (req, res, patientId, message = 'Access denied for this patient profile') => {
     // Doctors can now access any patient MRD. Scoping is removed for viewing.
@@ -529,11 +529,15 @@ exports.sendPrescriptionViaWhatsApp = async (req, res, next) => {
 
         const fullMessage = `Hi ${patient.parent_name || 'Parent'},\nPrescription for *${patient.child_name}* (Visit: ${visitDate}):\n\n${prescriptionText}\n\n${adviceText}\n\nRegards,\nDr. Indu's Child Care`;
 
-        await queueMessage(patient.wa_id, 'PRESCRIPTION_DELIVERY', {
+        // Send prescription via n8n webhook
+        await triggerWebhook('appointment', {
+            event_type: 'PRESCRIPTION_DELIVERY',
+            patient_id: mrd.patient_id,
             parent_name: patient.parent_name || 'Parent',
             child_name: patient.child_name,
             date: visitDate,
-            message_custom: fullMessage
+            wa_id: patient.wa_id,
+            message: fullMessage
         });
 
         await audit({
@@ -553,7 +557,7 @@ exports.sendPrescriptionViaWhatsApp = async (req, res, next) => {
             whatsapp_number: patient.wa_id
         });
 
-        res.json({ success: true, message: 'Prescription delivery queued via WhatsApp' });
+        res.json({ success: true, message: 'Prescription sent via n8n webhook' });
     } catch (err) {
         next(err);
     }

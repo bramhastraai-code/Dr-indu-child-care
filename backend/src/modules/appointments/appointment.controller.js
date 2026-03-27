@@ -15,7 +15,6 @@ const {
     ensureDoctorMatches,
     withDoctorFilter
 } = require('../../utils/doctorScope');
-const { queueMessage } = require('../../services/messageQueueService');
 const axios = require('axios');
 const { triggerWebhook } = require('../../services/webhookService');
 
@@ -484,65 +483,7 @@ exports.createAppointment = async (req, res, next) => {
         });
         appointmentPersisted = true;
 
-        // 6. Queue WhatsApp Notifications
-        try {
-            let waId;
-            try { waId = decrypt(patient.wa_id); } catch { waId = patient.wa_id; }
-
-            if (waId) {
-                const vars = {
-                    parent_name: patient.parent_name || patient.father_name || patient.mother_name || 'Parent',
-                    child_name: patient.child_name || 'Your child',
-                    doctor_name: finalDoctorName,
-                    date: queryDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }),
-                    appointment_time: appointment_time || 'Check token status',
-                    token: `#${token_number} (${token_pool})`,
-                    clinic_name: process.env.CLINIC_NAME || 'Dr. Indu Child Care Clinic',
-                    clinic_address: process.env.CLINIC_ADDRESS || 'Dr. Indu Child Care Clinic',
-                    clinic_contact: process.env.CLINIC_PHONE || '91XXXXXXXXXX'
-                };
-
-                // Confirmation
-                await queueMessage(waId, 'APPOINTMENT_CONFIRMED', vars, {
-                    relatedEntity: { entity_type: 'appointment', entity_id: appointment_id }
-                });
-
-                // Schedule Reminders
-                // 1. 24h Reminder (24 hours before appointment date/time)
-                const scheduled24h = new Date(queryDate.getTime() - (24 * 60 * 60 * 1000));
-                if (scheduled24h > new Date()) {
-                    await queueMessage(waId, 'APPOINTMENT_REMINDER_24H', vars, {
-                        scheduledFor: scheduled24h,
-                        relatedEntity: { entity_type: 'appointment', entity_id: appointment_id }
-                    });
-                }
-
-                // 2. 1h Reminder (1 hour before appointment time)
-                const [h, m] = (appointment_time || '10:00').split(':').map(Number);
-                const apptExactTime = new Date(queryDate);
-                apptExactTime.setHours(h, m, 0, 0);
-                const scheduled1h = new Date(apptExactTime.getTime() - (1 * 60 * 60 * 1000));
-
-                if (scheduled1h > new Date()) {
-                    await queueMessage(waId, 'APPOINTMENT_REMINDER_1H', vars, {
-                        scheduledFor: scheduled1h,
-                        relatedEntity: { entity_type: 'appointment', entity_id: appointment_id }
-                    });
-                }
-
-                // 3. 2h Reminder (2 hours before appointment time)
-                const scheduled2h = new Date(apptExactTime.getTime() - (2 * 60 * 60 * 1000));
-
-                if (scheduled2h > new Date()) {
-                    await queueMessage(waId, 'APPOINTMENT_REMINDER_2H', vars, {
-                        scheduledFor: scheduled2h,
-                        relatedEntity: { entity_type: 'appointment', entity_id: appointment_id }
-                    });
-                }
-            }
-        } catch (waErr) {
-            console.error('[createAppointment][WhatsApp Queue Error]', waErr.message);
-        }
+        // 6. WhatsApp Notifications are now handled by n8n triggers triggered below
 
         // 7. Audit
         const safeBookingSource = booking_source || 'dashboard';
@@ -574,8 +515,8 @@ exports.createAppointment = async (req, res, next) => {
             token_status: 'WAITING'
         };
 
-        // Trigger n8n webhook (awaited for reliability, using TitleCase for consistency)
-        await triggerWebhook('Appointment', responseData);
+        // Trigger n8n webhook (awaited for reliability, using lowercase as expected by n8n)
+        await triggerWebhook('appointment', responseData);
 
         res.status(201).json({
             success: true,
@@ -760,8 +701,8 @@ exports.updateAppointment = async (req, res, next) => {
 
         const enriched = await enrichAppointment(updated);
 
-        // Trigger n8n webhook for appointment modification
-        await triggerWebhook('Appointment-Upgradation', enriched);
+        // Trigger n8n webhook for appointment modification (using lowercase as expected by n8n)
+        await triggerWebhook('appointment-upgradation', enriched);
 
         // Returns full enriched object now
         res.json({ success: true, data: enriched });
@@ -1092,60 +1033,7 @@ exports.bookByWhatsapp = async (req, res) => {
             new_value: { patient_id: patient.patient_id, date: appointment_date, booking_source: 'whatsapp', wa_id: normalized, doctor_id: finalDoctorId, token_display }
         });
 
-        // Queue WhatsApp Notifications (Confirmation + Reminders)
-        try {
-            const waNotifId = String(normalized).replace(/\D/g, '');
-            if (waNotifId) {
-                const vars = {
-                    parent_name: patient.father_name || patient.mother_name || patient.parent_name || 'Parent',
-                    child_name: patient.child_name || 'Your child',
-                    doctor_name: finalDoctorName,
-                    date: queryDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }),
-                    appointment_time: appointment_time || 'Check token status',
-                    token: `#${token_number} (${token_pool})`,
-                    clinic_name: process.env.CLINIC_NAME || 'Dr. Indu Child Care Clinic',
-                    clinic_address: process.env.CLINIC_ADDRESS || 'Dr. Indu Child Care Clinic',
-                    clinic_contact: process.env.CLINIC_PHONE || ''
-                };
-
-                // Confirmation
-                await queueMessage(waNotifId, 'APPOINTMENT_CONFIRMED', vars, {
-                    relatedEntity: { entity_type: 'appointment', entity_id: appointment_id }
-                });
-
-                // 24h Reminder
-                const scheduled24h = new Date(queryDate.getTime() - (24 * 60 * 60 * 1000));
-                if (scheduled24h > new Date()) {
-                    await queueMessage(waNotifId, 'APPOINTMENT_REMINDER_24H', vars, {
-                        scheduledFor: scheduled24h,
-                        relatedEntity: { entity_type: 'appointment', entity_id: appointment_id }
-                    });
-                }
-
-                // 1h Reminder
-                const [hwh, mwh] = (appointment_time || '10:00').split(':').map(Number);
-                const apptExactTimeWh = new Date(queryDate);
-                apptExactTimeWh.setHours(hwh, mwh, 0, 0);
-                const scheduled1hWh = new Date(apptExactTimeWh.getTime() - (1 * 60 * 60 * 1000));
-                if (scheduled1hWh > new Date()) {
-                    await queueMessage(waNotifId, 'APPOINTMENT_REMINDER_1H', vars, {
-                        scheduledFor: scheduled1hWh,
-                        relatedEntity: { entity_type: 'appointment', entity_id: appointment_id }
-                    });
-                }
-
-                // 2h Reminder
-                const scheduled2hWh = new Date(apptExactTimeWh.getTime() - (2 * 60 * 60 * 1000));
-                if (scheduled2hWh > new Date()) {
-                    await queueMessage(waNotifId, 'APPOINTMENT_REMINDER_2H', vars, {
-                        scheduledFor: scheduled2hWh,
-                        relatedEntity: { entity_type: 'appointment', entity_id: appointment_id }
-                    });
-                }
-            }
-        } catch (waErr) {
-            console.error('[bookByWhatsapp][WhatsApp Queue Error]', waErr.message);
-        }
+        // WhatsApp Notifications are handled by n8n tokens/triggers
 
         res.status(201).json({
             success: true,
@@ -1311,62 +1199,7 @@ exports.bookByForm = async (req, res) => {
             new_value: { patient_id: patient.patient_id, date: appointment_date, doctor_id: finalDoctorId, token_display }
         });
 
-        // Queue WhatsApp Notifications (Confirmation + Reminders)
-        try {
-            let waFormId;
-            try { const { decrypt: dec } = require('../../utils/encryption'); waFormId = dec(patient.wa_id); } catch { waFormId = patient.wa_id; }
-            const waFormNotifId = String(waFormId || normalized).replace(/\D/g, '');
-            if (waFormNotifId) {
-                const vars = {
-                    parent_name: patient.father_name || patient.mother_name || patient.parent_name || 'Parent',
-                    child_name: patient.child_name || 'Your child',
-                    doctor_name: finalDoctorName,
-                    date: queryDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }),
-                    appointment_time: appointment_time || 'Check token status',
-                    token: `#${token_number} (${token_pool})`,
-                    clinic_name: process.env.CLINIC_NAME || 'Dr. Indu Child Care Clinic',
-                    clinic_address: process.env.CLINIC_ADDRESS || 'Dr. Indu Child Care Clinic',
-                    clinic_contact: process.env.CLINIC_PHONE || ''
-                };
-
-                // Confirmation
-                await queueMessage(waFormNotifId, 'APPOINTMENT_CONFIRMED', vars, {
-                    relatedEntity: { entity_type: 'appointment', entity_id: appointment_id }
-                });
-
-                // 24h Reminder
-                const scheduled24hFm = new Date(queryDate.getTime() - (24 * 60 * 60 * 1000));
-                if (scheduled24hFm > new Date()) {
-                    await queueMessage(waFormNotifId, 'APPOINTMENT_REMINDER_24H', vars, {
-                        scheduledFor: scheduled24hFm,
-                        relatedEntity: { entity_type: 'appointment', entity_id: appointment_id }
-                    });
-                }
-
-                // 1h Reminder
-                const [hfm, mfm] = (appointment_time || '10:00').split(':').map(Number);
-                const apptExactTimeFm = new Date(queryDate);
-                apptExactTimeFm.setHours(hfm, mfm, 0, 0);
-                const scheduled1hFm = new Date(apptExactTimeFm.getTime() - (1 * 60 * 60 * 1000));
-                if (scheduled1hFm > new Date()) {
-                    await queueMessage(waFormNotifId, 'APPOINTMENT_REMINDER_1H', vars, {
-                        scheduledFor: scheduled1hFm,
-                        relatedEntity: { entity_type: 'appointment', entity_id: appointment_id }
-                    });
-                }
-
-                // 2h Reminder
-                const scheduled2hFm = new Date(apptExactTimeFm.getTime() - (2 * 60 * 60 * 1000));
-                if (scheduled2hFm > new Date()) {
-                    await queueMessage(waFormNotifId, 'APPOINTMENT_REMINDER_2H', vars, {
-                        scheduledFor: scheduled2hFm,
-                        relatedEntity: { entity_type: 'appointment', entity_id: appointment_id }
-                    });
-                }
-            }
-        } catch (waErr) {
-            console.error('[bookByForm][WhatsApp Queue Error]', waErr.message);
-        }
+        // WhatsApp Notifications handled by n8n triggers
 
         res.status(201).json({
             success: true,
@@ -1434,8 +1267,6 @@ exports.getPending24hReminders = async (req, res, next) => {
                 }
             );
 
-            // POST to webhook
-            const axios = require('axios');
             for (const appt of enriched) {
                 const payload = {
                     appointment_id: appt.appointment_id,
@@ -1450,9 +1281,8 @@ exports.getPending24hReminders = async (req, res, next) => {
                     event_type: 'APPOINTMENT_REMINDER_24H'
                 };
                 
-                // Fire and forget
-                axios.post('https://n8n.brahmaastra.ai/webhook/24hr-message', payload)
-                    .catch(err => console.error('[Pending24h] Webhook failed:', err.message));
+                // Use triggerWebhook instead of direct axios
+                await triggerWebhook('24hr-message', payload);
             }
         }
 

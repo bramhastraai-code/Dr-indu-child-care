@@ -6,8 +6,8 @@ const audit = require('../../utils/audit');
 const { toMidnight } = require('../../utils/helpers');
 const { calculateTokenTime } = require('../../utils/tokenHelpers');
 const { handleDoctorLate, handleDoctorArrived } = require('../../services/doctorLateWorkflow');
-const { queueMessage } = require('../../services/messageQueueService');
 const { decrypt } = require('../../utils/encryption');
+const { triggerWebhook } = require('../../services/webhookService');
 
 const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
@@ -543,7 +543,8 @@ exports.setTodayStartTime = async (req, res) => {
 
                     const newTime = updatedTimes[appt.token_number];
 
-                    await queueMessage(waId, 'APPOINTMENT_TIME_UPDATED', {
+                    // Trigger n8n webhook for time update (using lowercase)
+                    await triggerWebhook('doctor-update', {
                         parent_name: patient.father_name || patient.mother_name || patient.parent_name || 'Parent',
                         child_name: patient.child_name || 'Your child',
                         doctor_name: doctor.name,
@@ -552,9 +553,8 @@ exports.setTodayStartTime = async (req, res) => {
                         token: `#${appt.token_number} (${appt.token_pool || 'ONLINE'})`,
                         token_number: appt.token_number,
                         clinic_name: process.env.CLINIC_NAME || 'Dr. Indu Child Care Clinic',
-                        clinic_contact: process.env.CLINIC_PHONE || ''
-                    }, {
-                        relatedEntity: { entity_type: 'appointment', entity_id: appt.appointment_id }
+                        clinic_contact: process.env.CLINIC_PHONE || '',
+                        event_type: 'APPOINTMENT_TIME_UPDATED'
                     });
                     notifiedCount++;
                 } catch (waErr) {
@@ -633,7 +633,8 @@ exports.notifyPatientsOfTime = async (req, res) => {
                 waId = String(waId || '').replace(/\D/g, '');
                 if (!waId) continue;
 
-                await queueMessage(waId, 'APPOINTMENT_TIME_UPDATED', {
+                // Trigger n8n webhook (using lowercase)
+                await triggerWebhook('doctor-update', {
                     parent_name: patient.father_name || patient.mother_name || patient.parent_name || 'Parent',
                     child_name: patient.child_name || 'Your child',
                     doctor_name: doctor.name,
@@ -642,9 +643,8 @@ exports.notifyPatientsOfTime = async (req, res) => {
                     token: `#${appt.token_number} (${appt.token_pool || 'ONLINE'})`,
                     token_number: appt.token_number,
                     clinic_name: process.env.CLINIC_NAME || 'Dr. Indu Child Care Clinic',
-                    clinic_contact: process.env.CLINIC_PHONE || ''
-                }, {
-                    relatedEntity: { entity_type: 'appointment', entity_id: appt.appointment_id }
+                    clinic_contact: process.env.CLINIC_PHONE || '',
+                    event_type: 'APPOINTMENT_TIME_UPDATED'
                 });
                 notifiedCount++;
             } catch (waErr) {

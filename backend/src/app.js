@@ -69,8 +69,8 @@ app.use('/api/reports', require('./modules/system/reports.routes'));
 app.use('/api/analytics', require('./modules/system/analytics.routes'));
 app.use('/api/feedback', require('./modules/system/feedback.routes'));
 
-// Messaging (doctor alerts, appointment notifications, token reminders)
-app.use('/api/messages', require('./modules/whatsapp/whatsapp.routes'));
+// Messaging (doctor alerts, appointment notifications, token reminders) - MOVED TO N8N
+// app.use('/api/messages', require('./modules/whatsapp/whatsapp.routes'));
 
 // Setup Swagger
 setupSwagger(app);

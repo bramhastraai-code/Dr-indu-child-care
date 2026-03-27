@@ -716,8 +716,7 @@ exports.notifyDelay = async (req, res) => {
             return res.status(200).json({ success: true, message: 'No waiting patients to notify' });
         }
 
-        const { queueMessage, newBatchId } = require('../../services/messageQueueService');
-        const batchId = newBatchId();
+        const batchId = `BATCH-${new Date().getFullYear()}-${Date.now().toString(36).toUpperCase()}`;
 
         let count = 0;
         for (const appt of appointments) {
@@ -740,20 +739,9 @@ exports.notifyDelay = async (req, res) => {
                 console.error('[notifyDelay] time calculation error:', e.message);
             }
 
-            await queueMessage(wa_id, 'DOCTOR_RUNNING_LATE', {
-                parent_name: patient.father_name || patient.mother_name || 'Parent',
-                doctor_name: doctor.name,
-                minutes: minutes,
-                date: queryDate.toLocaleDateString(),
-                original_time: appt.appointment_time,
-                new_time: newTimeStr,
-                token: appt.token_number,
-                clinic_name: process.env.CLINIC_NAME || 'Dr. Indu Child Care Clinic'
-            }, { batchId, relatedEntity: { appointment_id: appt.appointment_id } });
-
-            // Trigger n8n webhook for Doctor late delay
-            await triggerWebhook('Doctor-Update', {
-                mobile: wa_id, // Combine wa_id/mobile as just "mobile"
+            // Trigger n8n webhook for Doctor late delay (using lowercase for consistency)
+            await triggerWebhook('doctor-update', {
+                mobile: wa_id,
                 patient_name: patient.child_name || 'Patient',
                 parent_name: patient.father_name || patient.mother_name || 'Parent',
                 doctor_name: doctor.name,

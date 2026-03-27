@@ -1,9 +1,8 @@
 /**
  * Bot Hub — Chat History Controller
  *
- * Provides a unified chat history per patient / WhatsApp number, merging:
+ * Provides a unified chat history per patient / WhatsApp number using:
  *  1. BotChatHistory  — inbound user messages + bot replies logged by the bot
- *  2. WhatsAppMessageQueue — outbound clinic-initiated messages (confirmations, reminders, etc.)
  *
  * Routes:
  *   GET /api/bot/history/patient/:patient_id   — by patient_id
@@ -12,7 +11,6 @@
  */
 
 const BotChatHistory = require('../../models/BotChatHistory');
-const WhatsAppMessageQueue = require('../../models/WhatsAppMessageQueue');
 const Patient = require('../../models/Patient');
 const { normalizePhone, normalizeWaId } = require('../../utils/helpers');
 const { hashField, decrypt } = require('../../utils/encryption');
@@ -21,21 +19,6 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-/**
- * Convert a WhatsAppMessageQueue doc to a unified message shape.
- */
-const mapOutbound = (doc) => ({
-    _id: doc._id,
-    source: 'outbound',
-    sender: 'clinic',
-    message: doc.message_text,
-    message_type: doc.message_type,
-    status: doc.status,
-    wa_id: doc.wa_id,
-    timestamp: doc.sent_at || doc.scheduled_for || doc.created_at,
-    created_at: doc.created_at
-});
 
 /**
  * Convert a BotChatHistory doc to a unified message shape.
@@ -51,18 +34,6 @@ const mapInbound = (doc) => ({
     timestamp: doc.timestamp,
     created_at: doc.timestamp
 });
-
-/**
- * Merge, sort and paginate two arrays by timestamp descending.
- */
-const mergeSorted = (a, b, page, limit) => {
-    const all = [...a, ...b].sort((x, y) =>
-        new Date(y.timestamp) - new Date(x.timestamp)
-    );
-    const total = all.length;
-    const skip = (page - 1) * limit;
-    return { messages: all.slice(skip, skip + limit), total };
-};
 
 // ── GET /api/bot/history/patient/:patient_id ───────────────────────────────
 
@@ -83,23 +54,17 @@ exports.getHistoryByPatientId = async (req, res) => {
         try { rawWaId = decrypt(rawWaId); } catch (_) { /* raw */ }
         const normalizedWaId = String(rawWaId || '').replace(/\D/g, '');
 
-        // Fetch both sources (no server-side pagination yet — merge then paginate)
-        const [botMessages, outboundMessages] = await Promise.all([
+        const skip = (page - 1) * limit;
+
+        const [botMessages, total] = await Promise.all([
             BotChatHistory.find({
                 $or: [{ patient_id }, { wa_id: { $in: [normalizedWaId, patient.wa_id] } }]
-            }).sort({ timestamp: -1 }).limit(MAX_LIMIT).lean(),
+            }).sort({ timestamp: -1 }).skip(skip).limit(limit).lean(),
 
-            WhatsAppMessageQueue.find({
-                wa_id: normalizedWaId
-            }).sort({ created_at: -1 }).limit(MAX_LIMIT).lean()
+            BotChatHistory.countDocuments({
+                $or: [{ patient_id }, { wa_id: { $in: [normalizedWaId, patient.wa_id] } }]
+            })
         ]);
-
-        const { messages, total } = mergeSorted(
-            botMessages.map(mapInbound),
-            outboundMessages.map(mapOutbound),
-            page,
-            limit
-        );
 
         res.json({
             success: true,
@@ -110,7 +75,7 @@ exports.getHistoryByPatientId = async (req, res) => {
             page,
             limit,
             pages: Math.ceil(total / limit),
-            messages
+            messages: botMessages.map(mapInbound)
         });
     } catch (err) {
         console.error('[BotHistory] getHistoryByPatientId:', err.message);
@@ -133,24 +98,18 @@ exports.getHistoryByWaId = async (req, res) => {
         // Try to find the patient for extra context
         const patient = await Patient.findOne({ wa_hash, is_deleted: false }).lean();
 
-        const [botMessages, outboundMessages] = await Promise.all([
-            BotChatHistory.find({
-                $or: [
-                    { wa_id: normalizedWaId },
-                    ...(patient ? [{ patient_id: patient.patient_id }] : [])
-                ]
-            }).sort({ timestamp: -1 }).limit(MAX_LIMIT).lean(),
+        const skip = (page - 1) * limit;
+        const query = {
+            $or: [
+                { wa_id: normalizedWaId },
+                ...(patient ? [{ patient_id: patient.patient_id }] : [])
+            ]
+        };
 
-            WhatsAppMessageQueue.find({ wa_id: normalizedWaId })
-                .sort({ created_at: -1 }).limit(MAX_LIMIT).lean()
+        const [botMessages, total] = await Promise.all([
+            BotChatHistory.find(query).sort({ timestamp: -1 }).skip(skip).limit(limit).lean(),
+            BotChatHistory.countDocuments(query)
         ]);
-
-        const { messages, total } = mergeSorted(
-            botMessages.map(mapInbound),
-            outboundMessages.map(mapOutbound),
-            page,
-            limit
-        );
 
         res.json({
             success: true,
@@ -162,7 +121,7 @@ exports.getHistoryByWaId = async (req, res) => {
             page,
             limit,
             pages: Math.ceil(total / limit),
-            messages
+            messages: botMessages.map(mapInbound)
         });
     } catch (err) {
         console.error('[BotHistory] getHistoryByWaId:', err.message);
