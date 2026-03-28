@@ -544,7 +544,7 @@ exports.setTodayStartTime = async (req, res) => {
                     const newTime = updatedTimes[appt.token_number];
 
                     // Trigger n8n webhook for time update (using lowercase)
-                    await triggerWebhook('doctor-update', {
+                    await triggerWebhook('Doctor-update', {
                         parent_name: patient.father_name || patient.mother_name || patient.parent_name || 'Parent',
                         child_name: patient.child_name || 'Your child',
                         doctor_name: doctor.name,
@@ -634,7 +634,7 @@ exports.notifyPatientsOfTime = async (req, res) => {
                 if (!waId) continue;
 
                 // Trigger n8n webhook (using lowercase)
-                await triggerWebhook('doctor-update', {
+                await triggerWebhook('Doctor-update', {
                     parent_name: patient.father_name || patient.mother_name || patient.parent_name || 'Parent',
                     child_name: patient.child_name || 'Your child',
                     doctor_name: doctor.name,

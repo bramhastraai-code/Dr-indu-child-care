@@ -122,7 +122,7 @@ async function handleDoctorLate(doctorId, doctorName, minutesLate, etaTime) {
         };
 
         // Trigger n8n webhook for Doctor late delay (using lowercase for consistency)
-        await triggerWebhook('doctor-update', {
+        await triggerWebhook('Doctor-update', {
             batch_id: batchId,
             parent_wa_id: waId,
             parent_name: parentName,
@@ -203,7 +203,7 @@ async function handleDoctorArrived(doctorId, doctorName) {
         const token = appt.token_number ? `Token #${appt.token_number}` : appt.appointment_id;
         
         // Trigger n8n webhook for Doctor Arrived
-        await triggerWebhook('doctor-update', {
+        await triggerWebhook('Doctor-update', {
             batch_id: batchId,
             parent_wa_id: waId,
             parent_name: patient.parent_name || patient.father_name || patient.mother_name || 'Parent',

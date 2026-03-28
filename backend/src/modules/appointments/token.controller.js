@@ -740,7 +740,7 @@ exports.notifyDelay = async (req, res) => {
             }
 
             // Trigger n8n webhook for Doctor late delay (using lowercase for consistency)
-            await triggerWebhook('doctor-update', {
+            await triggerWebhook('Doctor-update', {
                 mobile: wa_id,
                 patient_name: patient.child_name || 'Patient',
                 parent_name: patient.father_name || patient.mother_name || 'Parent',
