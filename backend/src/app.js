@@ -75,6 +75,39 @@ app.use('/api/feedback', require('./modules/system/feedback.routes'));
 // Setup Swagger
 setupSwagger(app);
 
+// Webhook Health Check — Diagnose n8n connectivity from deployed server
+app.get('/api/system/webhook-health', async (req, res) => {
+    const { triggerWebhook } = require('./services/webhookService');
+    const endpoints = ['Registration', 'appointment', 'appointment-upgradation', 'Doctor-update', '24hr-message'];
+    const results = [];
+    
+    for (const ep of endpoints) {
+        const start = Date.now();
+        const result = await triggerWebhook(ep, {
+            _test: true,
+            _source: 'webhook-health-check',
+            _timestamp: new Date().toISOString()
+        });
+        results.push({
+            endpoint: ep,
+            success: result.success,
+            status: result.status,
+            error: result.error || null,
+            latency_ms: Date.now() - start
+        });
+    }
+    
+    const allOk = results.every(r => r.success);
+    res.status(allOk ? 200 : 503).json({
+        success: allOk,
+        environment: process.env.NODE_ENV || 'not set',
+        n8n_base_url: process.env.N8N_BASE_URL || 'https://n8n.brahmaastra.ai (default)',
+        n8n_api_key_set: !!(process.env.N8N_API_KEY),
+        n8n_use_test_webhook: process.env.N8N_USE_TEST_WEBHOOK === 'true',
+        results
+    });
+});
+
 // Base route
 app.get('/', (req, res) => {
     res.send('Dr. Indu Child Care API is running...');
