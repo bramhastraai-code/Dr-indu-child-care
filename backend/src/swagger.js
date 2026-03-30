@@ -851,6 +851,37 @@ const spec = {
                 responses: { 200: { description: 'Success' } }
             }
         },
+        '/api/system/webhook-health': {
+            get: {
+                tags: ['System'],
+                summary: '🔌 Webhook Health Check — Test n8n connectivity',
+                description: 'Tests all 5 n8n webhook endpoints (Registration, appointment, appointment-upgradation, Doctor-update, 24hr-message) from this server and reports success/failure, latency, and configuration.',
+                responses: {
+                    200: {
+                        description: 'All webhooks are reachable',
+                        content: {
+                            'application/json': {
+                                example: {
+                                    success: true,
+                                    environment: 'production',
+                                    n8n_base_url: 'https://n8n.brahmaastra.ai',
+                                    n8n_api_key_set: true,
+                                    n8n_use_test_webhook: false,
+                                    results: [
+                                        { endpoint: 'Registration', success: true, status: 200, error: null, latency_ms: 244 },
+                                        { endpoint: 'appointment', success: true, status: 200, error: null, latency_ms: 197 },
+                                        { endpoint: 'appointment-upgradation', success: true, status: 200, error: null, latency_ms: 80 },
+                                        { endpoint: 'Doctor-update', success: true, status: 200, error: null, latency_ms: 80 },
+                                        { endpoint: '24hr-message', success: true, status: 200, error: null, latency_ms: 81 }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    503: { description: 'One or more webhooks failed — check results array for details' }
+                }
+            }
+        },
         '/api/system/health': { get: { tags: ['System'], summary: 'Health check', responses: { 200: { description: 'Healthy' } } } },
         '/api/system/config': {
             get: { tags: ['System'], summary: 'Get system settings', responses: { 200: { description: 'Success' } } },

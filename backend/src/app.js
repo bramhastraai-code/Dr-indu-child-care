@@ -15,7 +15,6 @@ const jwtOnly = require('./middleware/jwtOnly');
 dotenv.config();
 
 const app = express();
-console.log('--- DEBUG: app.js loaded from backend/src/app.js ---');
 
 // Security Headers
 app.use(helmet({
