@@ -64,19 +64,22 @@ exports.getMRDByPatientId = async (req, res, next) => {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
         if (!await ensureDoctorCanAccessPatient(req, res, req.params.patient_id, 'You can only view MRD for patients linked to your profile')) return;
 
-        const [mrd, appointments] = await Promise.all([
+        const [mrdResult, appointments] = await Promise.all([
             MRD.findOne({ patient_id: req.params.patient_id }).lean(),
             Appointment.find({ patient_id: req.params.patient_id, is_deleted: false }).sort({ appointment_date: -1 }).lean()
         ]);
 
-        if (!mrd) return res.status(404).json({ success: false, message: 'MRD not found' });
-
+        const mrd = mrdResult || { patient_id: req.params.patient_id, entries: [] };
         const scopedEntries = await scopeEntriesForDoctor(req, mrd.entries || []);
 
         // Create a 'datewise' unified timeline
         const groupedByDate = {};
         const getDateKey = (date) => {
-            try { return new Date(date).toISOString().split('T')[0]; }
+            try { 
+                const d = new Date(date);
+                if (isNaN(d.getTime())) return 'unknown';
+                return d.toISOString().split('T')[0]; 
+            }
             catch (e) { return 'unknown'; }
         };
 
@@ -97,23 +100,24 @@ exports.getMRDByPatientId = async (req, res, next) => {
             .map(date => groupedByDate[date]);
 
         // Derive vaccination history
-        const vaccination_history = scopedEntries
+        const vaccination_history = (mrd.entries || [])
             .filter(e => e.visit_type === 'VACCINATION')
             .map(e => ({
                 vaccine_name: e.vaccine_given,
                 batch: e.vaccine_batch,
                 date: e.visit_date,
-                appointment_id: e.appointment_id
+                notes: e.clinical_notes,
+                doctor: e.attending_doctor
             }));
 
-        res.json({
+        res.status(200).json({
             success: true,
             data: {
                 ...mrd,
                 entries: scopedEntries.sort((a, b) => new Date(b.visit_date) - new Date(a.visit_date)),
-                vaccination_history,
                 appointments,
-                timeline // Unified datewise view
+                timeline,
+                vaccination_history
             }
         });
     } catch (err) {

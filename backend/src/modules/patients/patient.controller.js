@@ -20,6 +20,7 @@ const parseDOB = (raw) => {
     const parsed = new Date(raw);
     return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
+
 // Helper: generate next patient_id  e.g. 26-AA1
 const generatePatientId = async (firstName, lastName, childName) => {
     const year = new Date().getFullYear().toString().slice(-2);
@@ -27,14 +28,12 @@ const generatePatientId = async (firstName, lastName, childName) => {
     let fInitial = 'A';
     let lInitial = 'A';
 
-    // 1. Try to get initials from firstName/lastName
     if (firstName && firstName.trim()) {
         fInitial = firstName.trim().charAt(0).toUpperCase();
     }
     if (lastName && lastName.trim()) {
         lInitial = lastName.trim().charAt(0).toUpperCase();
     } else if (childName && childName.trim()) {
-        // 2. Fallback to childName if lastName is missing
         const parts = childName.trim().split(/\s+/);
         if (parts.length >= 1 && (!firstName || !firstName.trim())) {
             fInitial = parts[0].charAt(0).toUpperCase();
@@ -42,7 +41,6 @@ const generatePatientId = async (firstName, lastName, childName) => {
         if (parts.length >= 2) {
             lInitial = parts[parts.length - 1].charAt(0).toUpperCase();
         } else if (parts.length === 1 && (!lastName || !lastName.trim())) {
-            // Use second letter or repeat first if only one word
             lInitial = parts[0].length > 1 ? parts[0].charAt(1).toUpperCase() : parts[0].charAt(0).toUpperCase();
         }
     }
@@ -50,8 +48,6 @@ const generatePatientId = async (firstName, lastName, childName) => {
     const initials = `${fInitial}${lInitial}`;
     const prefix = `${year}-${initials}`;
 
-    // 3. Find all existing patients with this prefix to get the max sequence
-    // We fetch all to avoid string sorting issues (e.g., "9" > "10" in some cases)
     const existingPatients = await Patient.find({
         patient_key: { $regex: `^${prefix}\\d+$` }
     }).select('patient_key').lean();
@@ -66,19 +62,15 @@ const generatePatientId = async (firstName, lastName, childName) => {
     });
 
     const nextSeq = maxSeq + 1;
-    // No left padding (e.g., 1, 10, 100)
     const seqStr = `${nextSeq}`;
-
     return `${prefix}${seqStr}`;
 };
 
 const getScopedPatientIdFilter = async (req) => {
-    // Doctors can now see all patients. Scoping is removed for viewing.
     return null;
 };
 
 const ensureDoctorCanAccessPatient = async (req, res, patientId, message = 'Access denied for this patient profile') => {
-    // Doctors can now access any patient profile. Scoping is removed for viewing.
     return true;
 };
 
@@ -92,66 +84,41 @@ exports.registerPatient = async (req, res, next) => {
             child_name,
             parent_name,
             wa_id,
-            mobile,                     // fallback alias
+            mobile,
             registration_source,
 
-            // Section 1 – Personal
+            // Personal
             salutation,
             first_name,
             middle_name,
             last_name,
             gender,
-            mothers_name,
-            dob_unknown,
             dob,
-            age_years,
-            age_months,
-            age_days,
 
-            // Section 2 – Photo & ID
+            // Registration
             registration_date,
-            photo,
-            patient_photo,
 
-            // Section 3 – Parent / Guardian
+            // Parent / Guardian
             father_name,
-            father_email,
-            father_occupation,
             mother_name,
-            mother_email,
-            mother_occupation,
-            parent_mobile,              // user request
+            parent_mobile,
             communication_preference,
 
-            // Section 4 – Contact
-            email,
-
-            // Section 5 – Additional
-            source,
-            referred_by,
-            home_branch,
-            doctor,
-            religion,
-            language,
-            account_type,
-            rating,
-            remarks,
-            remark,
-
-            // Section 7 – Status
-            is_active,
-
-            // Section 8 – Address
+            // Address
             state,
             city,
             pincode,
             residential_address,
-            address, // alias for residential_address
-            enrollment_option,
-            send_to_specific,
+            address,
+
+            // Doctor
+            doctor,
+
+            // Status
+            is_active,
         } = req.body || {};
 
-        // 1. Resolve Child Name (Combine parts if missing)
+        // 1. Resolve Child Name
         let final_child_name = child_name;
         if (!final_child_name && first_name) {
             final_child_name = [first_name, middle_name, last_name].filter(Boolean).join(' ');
@@ -164,20 +131,6 @@ exports.registerPatient = async (req, res, next) => {
         const raw_wa_id = wa_id || parent_mobile || mobile;
         if (!raw_wa_id) {
             return res.status(400).json({ success: false, message: 'Unique mobile number is required' });
-        }
-
-
-        // Email is required and must be unique
-        if (!email || !email.trim()) {
-            return res.status(400).json({ success: false, message: 'Email Address is required' });
-        }
-        const email_hash = hashField(email.trim().toLowerCase());
-        const existingEmail = await Patient.findOne({ email_hash, is_deleted: false });
-        if (existingEmail) {
-            return res.status(400).json({
-                success: false,
-                message: 'This email address is already registered with another patient'
-            });
         }
 
         const final_wa_id = normalizeWaId(raw_wa_id);
@@ -208,11 +161,9 @@ exports.registerPatient = async (req, res, next) => {
         }
 
         const patient_id = await generatePatientId(first_name, last_name, final_child_name);
-        const patient_uid = patient_id; // Mapping patient_id to patient_uid as per spec format
-        const patient_key = await generatePatientKey(first_name, last_name, final_child_name);
 
         const patient = await Patient.create({
-            patient_key: patient_id, // we save generated id directly to patient_key
+            patient_key: patient_id,
             wa_id: final_wa_id,
             wa_hash,
 
@@ -223,58 +174,30 @@ exports.registerPatient = async (req, res, next) => {
             middle_name: middle_name || null,
             last_name: last_name || null,
             gender: normalizedGender,
-            mothers_name: mothers_name || mother_name || null,
-            parent_name: parent_name || null,
 
             // Birth
-            dob_unknown: dob_unknown || false,
             dob: parsedDob,
-            age_years: age_years ?? null,
-            age_months: age_months ?? null,
-            age_days: age_days ?? null,
 
-            // Photo & ID
+            // Registration
             registration_date: registration_date ? new Date(registration_date) : new Date(),
-            patient_photo: patient_photo || photo || null,
 
-            // Father
+            // Parent / Guardian
             father_name: father_name || null,
-            father_email: father_email || null,
-            father_occupation: father_occupation || null,
-
-            // Mother
-            mother_name: mother_name || mothers_name || null,
-            mother_email: mother_email || null,
-            mother_occupation: mother_occupation || null,
-
+            mother_name: mother_name || null,
             communication_preference: communication_preference ?? null,
-
-            // Contact
-            email: email || null,
-
-            // Additional
-            source: source || null,
-            referred_by: referred_by || null,
-            home_branch: home_branch || null,
-            doctor: doctor || null,
-            religion: religion || null,
-            language: language || null,
-            account_type: account_type || null,
-            rating: rating || null,
-            remarks: remarks || remark || null,
-
-            // Enrollment & Status
-            enrollment_option: enrollment_option || 'just_enroll',
-            send_to_specific: send_to_specific ?? false,
-            is_active: is_active !== undefined ? is_active : true,
-
-            registration_source: (registration_source || 'dashboard').toLowerCase(),
 
             // Address
             state: state || 'Maharashtra',
             city: city || 'Mumbai',
             pincode: pincode || null,
-            residential_address: residential_address || address || null
+            residential_address: residential_address || address || null,
+
+            // Doctor
+            doctor: doctor || 'Dr. Indu',
+
+            // Status
+            is_active: is_active !== undefined ? is_active : true,
+            registration_source: (registration_source || 'dashboard').toLowerCase(),
         });
 
         // Create blank MRD shell
@@ -298,13 +221,12 @@ exports.registerPatient = async (req, res, next) => {
             meta: { child_name, registration_source }
         });
 
-        // Trigger n8n webhook (awaited for reliability)
+        // Trigger n8n webhook
         await triggerWebhook('Registration', {
             patient_id,
             child_name: final_child_name,
             wa_id: final_wa_id,
-            email,
-            doctor,
+            doctor: doctor || 'Dr. Indu',
             registration_source: (registration_source || 'dashboard').toLowerCase()
         });
 
@@ -427,37 +349,6 @@ exports.getPatientByWaId = async (req, res, next) => {
     }
 };
 
-// @desc    Lookup patient by email
-exports.getPatientByEmail = async (req, res, next) => {
-    try {
-        const email = req.params.email || '';
-        if (!email) {
-            return res.status(400).json({ success: false, message: 'Email is required' });
-        }
-
-        const email_hash = hashField(email.trim().toLowerCase());
-        const patient = await Patient.findOne({
-            email_hash,
-            is_deleted: false
-        });
-
-        if (!patient) {
-            return res.json({
-                success: true,
-                is_registered: false,
-                message: 'Patient not registered with this email'
-            });
-        }
-
-        res.json({
-            success: true,
-            is_registered: true,
-            data: patient
-        });
-    } catch (err) {
-        next(err);
-    }
-};
 // @desc    Get patient by patient_id
 exports.getPatientById = async (req, res, next) => {
     try {
@@ -499,7 +390,6 @@ exports.getPatients = async (req, res, next) => {
             page = 1, 
             limit = 20, 
             search, 
-            source, 
             status, 
             gender, 
             doctor, 
@@ -542,10 +432,8 @@ exports.getPatients = async (req, res, next) => {
                 { child_name: regex },
                 { first_name: regex },
                 { last_name: regex },
-                { parent_name: regex },
                 { father_name: regex },
                 { mother_name: regex },
-                { patient_id: regex },
                 { patient_key: regex },
                 { city: regex },
                 { residential_address: regex },
@@ -553,7 +441,6 @@ exports.getPatients = async (req, res, next) => {
             ];
         }
 
-        if (source) query.registration_source = source.toLowerCase();
         if (status) query.registration_status = status.toUpperCase();
 
         const [patients, total] = await Promise.all([
@@ -609,7 +496,6 @@ exports.updatePatient = async (req, res, next) => {
         delete updates.wa_hash;
 
         updates.last_updated_at = new Date();
-        updates.last_updated_by = actor;
 
         const patient = await Patient.findOneAndUpdate(
             { patient_key: patient_id, is_deleted: false },
@@ -648,7 +534,7 @@ exports.deletePatient = async (req, res, next) => {
 
         const patient = await Patient.findOneAndUpdate(
             { patient_key: patient_id, is_deleted: false },
-            { $set: { is_deleted: true, is_active: false, deleted_at: new Date(), deleted_by: actor } },
+            { $set: { is_deleted: true, is_active: false, deleted_at: new Date() } },
             { new: true }
         );
 
@@ -665,38 +551,6 @@ exports.deletePatient = async (req, res, next) => {
         });
 
         res.json({ success: true, message: 'Patient deleted successfully' });
-    } catch (err) {
-        next(err);
-    }
-};
-
-// @desc    Upload patient photo (Base64 or multipart)
-// @route   PATCH /api/patients/:patient_id/photo
-exports.uploadPatientPhoto = async (req, res, next) => {
-    try {
-        if (!ensureDoctorSessionHasProfile(req, res)) return;
-
-        const { patient_id } = req.params;
-        if (!await ensureDoctorCanAccessPatient(req, res, patient_id, 'You can only update patients linked to your profile')) return;
-
-        const { photo, patient_photo } = req.body || {};
-        const photoData = photo || patient_photo;
-
-        if (!photoData) {
-            return res.status(400).json({ success: false, message: 'No photo data provided. Send base64 image in photo field.' });
-        }
-
-        const patient = await Patient.findOneAndUpdate(
-            { patient_key: patient_id, is_deleted: false },
-            { $set: { patient_photo: photoData, last_updated_at: new Date() } },
-            { new: true }
-        );
-
-        if (!patient) {
-            return res.status(404).json({ success: false, error_code: 'PATIENT_NOT_FOUND', message: 'Patient not found' });
-        }
-
-        res.json({ success: true, message: 'Photo uploaded successfully', photo_url: photoData });
     } catch (err) {
         next(err);
     }
@@ -724,10 +578,10 @@ exports.exportPatientsCsv = async (req, res, next) => {
             if (date_to) filter.registration_date.$lte = new Date(date_to);
         }
 
-        const patients = await Patient.find(filter).select('-password_hash -wa_hash -photo -patient_photo').lean();
+        const patients = await Patient.find(filter).select('-wa_hash').lean();
 
         // Build CSV
-        const fields = ['patient_id', 'child_name', 'gender', 'dob', 'father_name', 'mother_name', 'email', 'doctor', 'registration_source', 'is_active', 'registered_at'];
+        const fields = ['patient_key', 'child_name', 'gender', 'dob', 'father_name', 'mother_name', 'doctor', 'registration_source', 'is_active', 'registration_date'];
         const header = fields.join(',');
         const rows = patients.map(p =>
             fields.map(f => {
@@ -793,4 +647,46 @@ exports.getPatientStats = async (req, res, next) => {
     }
 };
 
+// @desc    Get patient by email
+// @route   GET /api/patients/by-email/:email
+exports.getPatientByEmail = async (req, res, next) => {
+    try {
+        const { email } = req.params;
+        const patient = await Patient.findOne({ email, is_deleted: false });
 
+        if (!patient) {
+            return res.status(404).json({ success: false, message: 'Patient not found' });
+        }
+
+        res.json({ success: true, data: patient });
+    } catch (err) {
+        next(err);
+    }
+};
+
+// @desc    Upload patient photo
+// @route   PATCH /api/patients/:patient_id/photo
+exports.uploadPatientPhoto = async (req, res, next) => {
+    try {
+        const { patient_id } = req.params;
+        const { photo } = req.body;
+
+        if (!photo) {
+            return res.status(400).json({ success: false, message: 'Photo data is required' });
+        }
+
+        const patient = await Patient.findOneAndUpdate(
+            { patient_key: patient_id, is_deleted: false },
+            { $set: { photo } },
+            { new: true }
+        );
+
+        if (!patient) {
+            return res.status(404).json({ success: false, message: 'Patient not found' });
+        }
+
+        res.json({ success: true, message: 'Photo uploaded successfully', data: patient });
+    } catch (err) {
+        next(err);
+    }
+};

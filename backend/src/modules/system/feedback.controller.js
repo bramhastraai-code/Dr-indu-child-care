@@ -6,7 +6,16 @@ const audit = require('../../utils/audit');
 // @access  Public (Rate limited)
 exports.submitFeedback = async (req, res) => {
     try {
-        const { name, mobile, email, doctor_rating, frontdesk_rating, hospital_rating, appointment_id } = req.body || {};
+        const { 
+            name, 
+            mobile, 
+            email, 
+            doctor_rating, 
+            frontdesk_rating, 
+            hospital_rating, 
+            suggestions,
+            appointment_id 
+        } = req.body || {};
 
         if (!doctor_rating || !frontdesk_rating || !hospital_rating) {
             return res.status(400).json({ success: false, message: 'All ratings (doctor, frontdesk, hospital) are required.' });
@@ -19,6 +28,7 @@ exports.submitFeedback = async (req, res) => {
             doctor_rating,
             frontdesk_rating,
             hospital_rating,
+            suggestions: suggestions || null,
             appointment_id: appointment_id || null,
             ip_address: req.ip || req.headers['x-forwarded-for'] || 'unknown',
             submitted_at: new Date()

@@ -5,7 +5,10 @@ const {
     getTokenAnalytics,
     getRegistrationAnalytics,
     getFeedbackAnalytics,
-    getPracticeInsights
+    getPracticeInsights,
+    getVaccineAnalytics,
+    getDemographicAnalytics,
+    getTopReferrers
 } = require('./analytics.controller');
 
 const auth = require('../../middleware/auth');
@@ -18,5 +21,8 @@ router.get('/tokens', getTokenAnalytics);
 router.get('/registrations', getRegistrationAnalytics);
 router.get('/feedback', getFeedbackAnalytics);
 router.get('/practice-insights', getPracticeInsights);
+router.get('/vaccines', getVaccineAnalytics);
+router.get('/demographics', getDemographicAnalytics);
+router.get('/referrers', getTopReferrers);
 
 module.exports = router;

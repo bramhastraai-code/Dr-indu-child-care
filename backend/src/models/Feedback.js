@@ -31,6 +31,10 @@ const FeedbackSchema = new mongoose.Schema({
         min: 1,
         max: 5
     },
+    suggestions: {
+        type: String,
+        default: null
+    },
     appointment_id: {
         type: String,
         ref: 'Appointment',

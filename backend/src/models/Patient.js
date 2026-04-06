@@ -4,8 +4,7 @@ const { normalizeGender } = require('../utils/helpers');
 
 const PatientSchema = new mongoose.Schema({
   // ── Core / System ────────────────────────────────────────────
-  // ── Core / System ────────────────────────────────────────────
-  // Human-readable unique key, e.g. "26-RK-01" (Year-Initials-Sequence) or "PID-123"
+  // Human-readable unique key, e.g. "26-RK-01" (Year-Initials-Sequence)
   patient_key: {
     type: String,
     unique: true,
@@ -14,7 +13,7 @@ const PatientSchema = new mongoose.Schema({
     default: null
   },
 
-  // WhatsApp / Primary Contact (Father)
+  // WhatsApp / Primary Contact
   wa_id: {
     type: String,
     required: true,
@@ -23,18 +22,6 @@ const PatientSchema = new mongoose.Schema({
     get: decrypt
   },
   wa_hash: {
-    type: String,
-    index: true
-  },
-
-  // WhatsApp / Secondary Contact (Mother)
-  wa_id_2: {
-    type: String,
-    index: true,
-    set: encrypt,
-    get: decrypt
-  },
-  wa_hash_2: {
     type: String,
     index: true
   },
@@ -60,7 +47,6 @@ const PatientSchema = new mongoose.Schema({
     trim: true,
     default: null
   },
-  // Backward-compat combined name (child full name) - now optional as it can be computed
   child_name: {
     type: String,
     trim: true,
@@ -72,100 +58,33 @@ const PatientSchema = new mongoose.Schema({
     set: (v) => normalizeGender(v),
     default: null
   },
-  mothers_name: {
-    type: String,
-    trim: true,
-    default: null
-  },
 
   // Birth Details
-  dob_unknown: {
-    type: Boolean,
-    default: false
-  },
   dob: {
     type: Date,
     default: null
   },
-  // Computed/stored age (for cases where DOB is unknown)
-  age_years: {
-    type: Number,
-    default: null
-  },
-  age_months: {
-    type: Number,
-    default: null
-  },
-  age_days: {
-    type: Number,
-    default: null
-  },
 
-  // ── Section 2: Photograph & Patient ID ───────────────────────
+  // ── Section 2: Registration ───────────────────────────────────
   registration_date: {
     type: Date,
     default: Date.now
   },
-  patient_photo: {
-    type: String,
-    default: null
-  },
-
 
   // ── Section 3: Parent / Guardian Information ─────────────────
-  // Father
   father_name: {
     type: String,
     trim: true,
     default: null
   },
-  father_email: {
-    type: String,
-    trim: true,
-    lowercase: true,
-    default: null
-  },
-  father_occupation: {
-    type: String,
-    trim: true,
-    default: null
-  },
-
-  // Mother
   mother_name: {
     type: String,
     trim: true,
     default: null
   },
-  mother_email: {
-    type: String,
-    trim: true,
-    lowercase: true,
-    default: null
-  },
-  mother_occupation: {
-    type: String,
-    trim: true,
-    default: null
-  },
-
   communication_preference: {
-    type: mongoose.Schema.Types.Mixed, // Can be Boolean or String
+    type: mongoose.Schema.Types.Mixed,
     default: null
-  },
-
-  // Encrypted primary email (for portal login / comms)
-  email: {
-    type: String,
-    trim: true,
-    lowercase: true,
-    default: null,
-    set: (v) => v ? encrypt(v) : v,
-    get: (v) => v ? decrypt(v) : v
-  },
-  email_hash: {
-    type: String,
-    index: true
   },
 
   // ── Section 4: Address Details ───────────────────────────────
@@ -190,65 +109,14 @@ const PatientSchema = new mongoose.Schema({
     default: null
   },
 
-  // ── Section 5: Additional Details ────────────────────────────
-  source: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  referred_by: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  home_branch: {
-    type: String,
-    trim: true,
-    default: null
-  },
+  // ── Section 5: Doctor ─────────────────────────────────────────
   doctor: {
     type: String,
     trim: true,
-    default: null
-  },
-  religion: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  language: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  account_type: {
-    type: String,
-    trim: true,
-    default: null
-  },
-  rating: {
-    type: String,
-    default: null
+    default: 'Dr. Indu'
   },
 
-  remarks: {
-    type: String,
-    trim: true,
-    default: null
-  },
-
-  // ── Section 6: Enrollment Options ────────────────────────────
-  enrollment_option: {
-    type: String,
-    enum: ['just_enroll', 'send_to_specific', 'book_appointment', null],
-    default: 'just_enroll'
-  },
-  send_to_specific: {
-    type: Boolean,
-    default: false
-  },
-
-  // ── Section 7: Status ─────────────────────────────────────────
+  // ── Section 6: Status ─────────────────────────────────────────
   is_active: {
     type: Boolean,
     default: true
@@ -273,14 +141,10 @@ const PatientSchema = new mongoose.Schema({
   last_updated_at: {
     type: Date,
     default: Date.now
-  },
-  last_updated_by: {
-    type: String,
-    default: null
   }
 }, {
   timestamps: false,
-  autoIndex: false, // Disable auto-index creation to prevent buffering timeouts
+  autoIndex: false,
   toJSON: { getters: true, virtuals: true },
   toObject: { getters: true, virtuals: true }
 });
@@ -292,14 +156,6 @@ PatientSchema.pre('save', function () {
   if (this.isModified('wa_id')) {
     const rawVal = decrypt(this.wa_id);
     this.wa_hash = hashField(normalizePhone(rawVal));
-  }
-  if (this.isModified('wa_id_2')) {
-    const rawVal = decrypt(this.wa_id_2);
-    this.wa_hash_2 = hashField(normalizePhone(rawVal));
-  }
-  if (this.isModified('email')) {
-    const rawVal = decrypt(this.email);
-    this.email_hash = hashField(rawVal);
   }
 
   if (this.isModified('first_name') || this.isModified('middle_name') || this.isModified('last_name')) {
@@ -317,12 +173,10 @@ PatientSchema.virtual('wa_masked').get(function () {
   return this.wa_id ? maskData(this.wa_id) : null;
 });
 
-// Alias for backward-compat
 PatientSchema.virtual('parent_mobile').get(function () {
   return this.wa_id;
 });
 
-// Full name virtual
 PatientSchema.virtual('full_name').get(function () {
   if (this.first_name || this.last_name) {
     return [this.salutation, this.first_name, this.middle_name, this.last_name]
@@ -335,7 +189,7 @@ PatientSchema.virtual('full_name').get(function () {
 PatientSchema.virtual('appointments', {
   ref: 'Appointment',
   localField: 'patient_key',
-  foreignField: 'patient_id' // We will keep 'patient_id' in Appointment for now or rename it there too
+  foreignField: 'patient_id'
 });
 
 PatientSchema.virtual('mrd', {
@@ -346,4 +200,3 @@ PatientSchema.virtual('mrd', {
 });
 
 module.exports = mongoose.model('Patient', PatientSchema);
-

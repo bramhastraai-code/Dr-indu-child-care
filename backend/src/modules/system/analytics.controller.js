@@ -1,6 +1,9 @@
 const Appointment = require('../../models/Appointment');
 const Feedback = require('../../models/Feedback');
 const Patient = require('../../models/Patient');
+const MRD = require('../../models/MRD');
+const Vaccine = require('../../models/Vaccine');
+const ReferringDoctor = require('../../models/ReferringDoctor');
 const { toMidnight } = require('../../utils/helpers');
 
 // @desc    Get appointment analytics
@@ -243,6 +246,154 @@ exports.getPracticeInsights = async (req, res) => {
                     return acc;
                 }, {})
             }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Get vaccine analytics
+// @route   GET /api/analytics/vaccines
+exports.getVaccineAnalytics = async (req, res) => {
+    try {
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const next7Days = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000));
+
+        const [topVaccines, upcomingDoses, totalVaccinations] = await Promise.all([
+            // Top 5 Vaccines this Month
+            MRD.aggregate([
+                { $unwind: '$entries' },
+                { 
+                    $match: { 
+                        'entries.visit_type': 'VACCINATION',
+                        'entries.visit_date': { $gte: startOfMonth },
+                        'entries.vaccine_given': { $ne: null }
+                    } 
+                },
+                { $group: { _id: '$entries.vaccine_given', count: { $sum: 1 } } },
+                { $sort: { count: -1 } },
+                { $limit: 5 }
+            ]),
+            // Upcoming Dose Alerts (Next 7 days)
+            MRD.aggregate([
+                { $unwind: '$entries' },
+                { 
+                    $match: { 
+                        'entries.next_visit_due': { $gte: toMidnight(now), $lte: toMidnight(next7Days) }
+                    } 
+                },
+                {
+                    $lookup: {
+                        from: 'patients',
+                        localField: 'patient_id',
+                        foreignField: 'patient_id',
+                        as: 'patient'
+                    }
+                },
+                { $unwind: '$patient' },
+                {
+                    $project: {
+                        patient_id: 1,
+                        patient_name: { $concat: ['$patient.first_name', ' ', '$patient.last_name'] },
+                        child_name: '$patient.child_name',
+                        next_due_date: '$entries.next_visit_due',
+                        vaccine_expected: '$entries.vaccine_given' // or next predicted
+                    }
+                },
+                { $limit: 20 }
+            ]),
+            // Total vaccinations ever
+            MRD.aggregate([
+                { $unwind: '$entries' },
+                { $match: { 'entries.visit_type': 'VACCINATION' } },
+                { $count: 'count' }
+            ])
+        ]);
+
+        res.json({
+            success: true,
+            data: {
+                top_vaccines: topVaccines,
+                upcoming_doses: upcomingDoses,
+                total_vaccinations: totalVaccinations[0]?.count || 0
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Get demographic analytics
+// @route   GET /api/analytics/demographics
+exports.getDemographicAnalytics = async (req, res) => {
+    try {
+        const [regions, ageGroups] = await Promise.all([
+            // Regional Distribution
+            Patient.aggregate([
+                { $match: { is_deleted: false } },
+                { $group: { _id: { city: '$city', state: '$state' }, count: { $sum: 1 } } },
+                { $sort: { count: -1 } },
+                { $limit: 10 }
+            ]),
+            // Age-Group Distribution
+            Patient.aggregate([
+                { $match: { is_deleted: false, dob: { $ne: null } } },
+                {
+                    $addFields: {
+                        ageInDays: {
+                            $divide: [
+                                { $subtract: [new Date(), "$dob"] },
+                                (1000 * 60 * 60 * 24)
+                            ]
+                        }
+                    }
+                },
+                {
+                    $bucket: {
+                        groupBy: "$ageInDays",
+                        boundaries: [0, 365, 1095, 4380, 6570],
+                        default: "Adolescents",
+                        output: { count: { $sum: 1 } }
+                    }
+                }
+            ])
+        ]);
+
+        const ageMapping = {
+            0: "Infants (0-1y)",
+            365: "Toddlers (1-3y)",
+            1095: "Children (3-12y)",
+            4380: "Adolescents (12-18y)",
+            "Adolescents": "Adolescents (18y+)"
+        };
+
+        res.json({
+            success: true,
+            data: {
+                regions: regions.map(r => ({ location: `${r._id.city || 'Unknown'}, ${r._id.state || 'Unknown'}`, count: r.count })),
+                age_distribution: ageGroups.map(g => ({ group: ageMapping[g._id] || g._id, count: g.count }))
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// @desc    Get top referrers
+// @route   GET /api/analytics/referrers
+exports.getTopReferrers = async (req, res) => {
+    try {
+        const referrers = await Patient.aggregate([
+            { $match: { is_deleted: false, referred_by: { $ne: null, $ne: '' } } },
+            { $group: { _id: '$referred_by', count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+            { $limit: 10 }
+        ]);
+
+        res.json({
+            success: true,
+            data: referrers.map(r => ({ name: r._id, count: r.count }))
         });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
