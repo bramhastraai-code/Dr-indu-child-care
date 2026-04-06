@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "main": "src/app.js",
   "scripts": {
-    "start": "node src/app.js",
+    "start": "NODE_ENV=production node src/app.js",
     "dev": "nodemon src/app.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "echo 'No build step required for Node backend. Ready for deployment.'",
+    "test": "jest"
   },
   "keywords": [],
   "author": "Deepak Santosh Dukare",

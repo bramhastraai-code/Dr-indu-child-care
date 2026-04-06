@@ -10,15 +10,20 @@ router.post('/login', login);
 router.post('/refresh-token', refreshToken);
 router.post('/logout', logout);
 
-// ── All Admin Routes — now public
+// ── Private Admin Routes ───────────────────────────────────────────
+router.use(auth); // Require JWT for all routes below
+
 router.get('/profile', getProfile);
 router.patch('/profile', updateProfile);
 
-router.get('/overview', getSystemOverview);
+// System overview and role configuration
+router.get('/overview', authorize('superadmin', 'admin'), getSystemOverview);
 router.get('/roles', getAvailableRoles);
-router.get('/users', getAdmins);
-router.post('/users', createAdmin);
-router.patch('/users/:user_id', updateAdmin);
-router.delete('/users/:user_id', deleteAdmin);
+
+// User Management (Super Admin only for create/delete, Admin can view/update)
+router.get('/users', authorize('superadmin', 'admin'), getAdmins);
+router.post('/users', authorize('superadmin'), createAdmin);
+router.patch('/users/:user_id', authorize('superadmin', 'admin'), updateAdmin);
+router.delete('/users/:user_id', authorize('superadmin'), deleteAdmin);
 
 module.exports = router;

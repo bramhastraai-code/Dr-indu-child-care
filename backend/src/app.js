@@ -14,6 +14,10 @@ const jwtOnly = require('./middleware/jwtOnly');
 // Load env vars
 dotenv.config();
 
+// Ensure all required variables are set for deployment
+const validateEnv = require('./utils/validateEnv');
+validateEnv();
+
 const app = express();
 
 // Security Headers
