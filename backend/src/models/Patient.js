@@ -4,29 +4,17 @@ const { normalizeGender } = require('../utils/helpers');
 
 const PatientSchema = new mongoose.Schema({
   // ── Core / System ────────────────────────────────────────────
-  patient_id: {
-    type: String,
-    unique: true,
-    required: true,
-    index: true
-  },
-  patient_uid: {
-    type: String,
-    unique: true,
-    required: true,
-    index: true
-  },
-
-  // Human-readable unique key, e.g. "26-RK-01" (Year-Initials-Sequence)
+  // ── Core / System ────────────────────────────────────────────
+  // Human-readable unique key, e.g. "26-RK-01" (Year-Initials-Sequence) or "PID-123"
   patient_key: {
     type: String,
     unique: true,
-    sparse: true,   // allows null for old records
+    required: true,
     index: true,
     default: null
   },
 
-  // WhatsApp / primary contact phone (encrypted)
+  // WhatsApp / Primary Contact (Father)
   wa_id: {
     type: String,
     required: true,
@@ -35,6 +23,18 @@ const PatientSchema = new mongoose.Schema({
     get: decrypt
   },
   wa_hash: {
+    type: String,
+    index: true
+  },
+
+  // WhatsApp / Secondary Contact (Mother)
+  wa_id_2: {
+    type: String,
+    index: true,
+    set: encrypt,
+    get: decrypt
+  },
+  wa_hash_2: {
     type: String,
     index: true
   },
@@ -270,10 +270,6 @@ const PatientSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  registered_at: {
-    type: Date,
-    default: Date.now
-  },
   last_updated_at: {
     type: Date,
     default: Date.now
@@ -297,6 +293,10 @@ PatientSchema.pre('save', function () {
     const rawVal = decrypt(this.wa_id);
     this.wa_hash = hashField(normalizePhone(rawVal));
   }
+  if (this.isModified('wa_id_2')) {
+    const rawVal = decrypt(this.wa_id_2);
+    this.wa_hash_2 = hashField(normalizePhone(rawVal));
+  }
   if (this.isModified('email')) {
     const rawVal = decrypt(this.email);
     this.email_hash = hashField(rawVal);
@@ -309,6 +309,10 @@ PatientSchema.pre('save', function () {
 });
 
 // ── Virtuals ───────────────────────────────────────────────────
+PatientSchema.virtual('patient_id').get(function () {
+  return this.patient_key;
+});
+
 PatientSchema.virtual('wa_masked').get(function () {
   return this.wa_id ? maskData(this.wa_id) : null;
 });
@@ -330,13 +334,13 @@ PatientSchema.virtual('full_name').get(function () {
 // Deep Connections: Virtual Population
 PatientSchema.virtual('appointments', {
   ref: 'Appointment',
-  localField: 'patient_id',
-  foreignField: 'patient_id'
+  localField: 'patient_key',
+  foreignField: 'patient_id' // We will keep 'patient_id' in Appointment for now or rename it there too
 });
 
 PatientSchema.virtual('mrd', {
   ref: 'MRD',
-  localField: 'patient_id',
+  localField: 'patient_key',
   foreignField: 'patient_id',
   justOne: true
 });

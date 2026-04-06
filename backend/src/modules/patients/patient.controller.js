@@ -53,12 +53,12 @@ const generatePatientId = async (firstName, lastName, childName) => {
     // 3. Find all existing patients with this prefix to get the max sequence
     // We fetch all to avoid string sorting issues (e.g., "9" > "10" in some cases)
     const existingPatients = await Patient.find({
-        patient_id: { $regex: `^${prefix}\\d+$` }
-    }).select('patient_id').lean();
+        patient_key: { $regex: `^${prefix}\\d+$` }
+    }).select('patient_key').lean();
 
     let maxSeq = 0;
     existingPatients.forEach(p => {
-        const seqPart = p.patient_id.slice(prefix.length);
+        const seqPart = p.patient_key.slice(prefix.length);
         const seqNum = parseInt(seqPart, 10);
         if (!isNaN(seqNum) && seqNum > maxSeq) {
             maxSeq = seqNum;
@@ -212,9 +212,7 @@ exports.registerPatient = async (req, res, next) => {
         const patient_key = await generatePatientKey(first_name, last_name, final_child_name);
 
         const patient = await Patient.create({
-            patient_id,
-            patient_uid,
-            patient_key,
+            patient_key: patient_id, // we save generated id directly to patient_key
             wa_id: final_wa_id,
             wa_hash,
 
@@ -465,7 +463,7 @@ exports.getPatientById = async (req, res, next) => {
     try {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
-        const patient = await Patient.findOne({ patient_id: req.params.patient_id, is_deleted: false });
+        const patient = await Patient.findOne({ patient_key: req.params.patient_id, is_deleted: false });
 
         if (!patient) {
             return res.status(404).json({ success: false, error_code: 'PATIENT_NOT_FOUND', message: 'Patient not found' });
@@ -532,9 +530,9 @@ exports.getPatients = async (req, res, next) => {
         const final_from = from || date_from;
         const final_to = to || date_to;
         if (final_from || final_to) {
-            query.registered_at = {};
-            if (final_from) query.registered_at.$gte = new Date(final_from);
-            if (final_to) query.registered_at.$lte = new Date(final_to);
+            query.registration_date = {};
+            if (final_from) query.registration_date.$gte = new Date(final_from);
+            if (final_to) query.registration_date.$lte = new Date(final_to);
         }
 
         if (search) {
@@ -560,7 +558,7 @@ exports.getPatients = async (req, res, next) => {
 
         const [patients, total] = await Promise.all([
             Patient.find(query)
-                .sort({ registered_at: -1 })
+                .sort({ registration_date: -1 })
                 .skip(skip)
                 .limit(limit),
             Patient.countDocuments(query)
@@ -606,7 +604,7 @@ exports.updatePatient = async (req, res, next) => {
 
         // Protect immutable fields
         delete updates.patient_id;
-        delete updates.registered_at;
+        delete updates.registration_date;
         delete updates._id;
         delete updates.wa_hash;
 
@@ -614,7 +612,7 @@ exports.updatePatient = async (req, res, next) => {
         updates.last_updated_by = actor;
 
         const patient = await Patient.findOneAndUpdate(
-            { patient_id, is_deleted: false },
+            { patient_key: patient_id, is_deleted: false },
             { $set: updates },
             { new: true, runValidators: true }
         );
@@ -649,7 +647,7 @@ exports.deletePatient = async (req, res, next) => {
         if (!await ensureDoctorCanAccessPatient(req, res, patient_id, 'You can only delete patients linked to your profile')) return;
 
         const patient = await Patient.findOneAndUpdate(
-            { patient_id, is_deleted: false },
+            { patient_key: patient_id, is_deleted: false },
             { $set: { is_deleted: true, is_active: false, deleted_at: new Date(), deleted_by: actor } },
             { new: true }
         );
@@ -689,7 +687,7 @@ exports.uploadPatientPhoto = async (req, res, next) => {
         }
 
         const patient = await Patient.findOneAndUpdate(
-            { patient_id, is_deleted: false },
+            { patient_key: patient_id, is_deleted: false },
             { $set: { patient_photo: photoData, last_updated_at: new Date() } },
             { new: true }
         );
@@ -721,9 +719,9 @@ exports.exportPatientsCsv = async (req, res, next) => {
         }
         if (doctor) filter.doctor = new RegExp(doctor, 'i');
         if (date_from || date_to) {
-            filter.registered_at = {};
-            if (date_from) filter.registered_at.$gte = new Date(date_from);
-            if (date_to) filter.registered_at.$lte = new Date(date_to);
+            filter.registration_date = {};
+            if (date_from) filter.registration_date.$gte = new Date(date_from);
+            if (date_to) filter.registration_date.$lte = new Date(date_to);
         }
 
         const patients = await Patient.find(filter).select('-password_hash -wa_hash -photo -patient_photo').lean();
@@ -771,8 +769,8 @@ exports.getPatientStats = async (req, res, next) => {
             Patient.aggregate([{ $match: baseMatch }, { $group: { _id: '$gender', count: { $sum: 1 } } }]),
             Patient.aggregate([{ $match: baseMatch }, { $group: { _id: '$doctor', count: { $sum: 1 } } }]),
             Patient.aggregate([{ $match: baseMatch }, { $group: { _id: '$registration_source', count: { $sum: 1 } } }]),
-            Patient.countDocuments({ ...baseMatch, registered_at: { $gte: startOfMonth } }),
-            Patient.countDocuments({ ...baseMatch, registered_at: { $gte: startOfWeek } }),
+            Patient.countDocuments({ ...baseMatch, registration_date: { $gte: startOfMonth } }),
+            Patient.countDocuments({ ...baseMatch, registration_date: { $gte: startOfWeek } }),
         ]);
 
         const toObj = (arr) => arr.reduce((acc, { _id, count }) => { if (_id) acc[_id] = count; return acc; }, {});
