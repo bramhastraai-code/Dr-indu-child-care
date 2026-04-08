@@ -71,6 +71,9 @@ app.use('/api/reminders', require('./modules/system/reminders.routes'));
 app.use('/api/reports', require('./modules/system/reports.routes'));
 app.use('/api/analytics', require('./modules/system/analytics.routes'));
 app.use('/api/feedback', require('./modules/system/feedback.routes'));
+app.use('/api/prescriptions', require('./modules/prescriptions/prescription.routes'));
+app.use('/api/vaccinations', require('./modules/vaccinations/vaccination.routes'));
+app.use('/api/child-history', require('./modules/child_history/childHistory.routes'));
 
 // Messaging (doctor alerts, appointment notifications, token reminders) - MOVED TO N8N
 // app.use('/api/messages', require('./modules/whatsapp/whatsapp.routes'));
