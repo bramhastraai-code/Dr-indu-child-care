@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const VaccinationSchema = new mongoose.Schema({
   patientId: {
-    type: Number,
+    type: String,
     required: true
   },
   wardInpatientId: {
