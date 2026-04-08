@@ -8,7 +8,11 @@ const { hashField, decrypt } = require('../../utils/encryption');
 const { getDoctorIdFromSession, ensureDoctorSessionHasProfile } = require('../../utils/doctorScope');
 const { generatePatientKey } = require('../../utils/patientKey');
 const { triggerWebhook } = require('../../services/webhookService');
-
+const LegacyPatientMap = require('../../models/LegacyPatientMap');
+const Prescription = require('../../models/Prescription');
+const Vaccination = require('../../models/Vaccination');
+const ChildHistory = require('../../models/ChildHistory');
+const Feedback = require('../../models/Feedback');
 // Helper: parse DD/MM/YYYY or YYYY-MM-DD to Date
 const parseDOB = (raw) => {
     if (!raw) return null;
@@ -690,3 +694,51 @@ exports.uploadPatientPhoto = async (req, res, next) => {
         next(err);
     }
 };
+
+// @desc    Get comprehensive profile including appointments, documents, and legacy data
+// @route   GET /api/patients/:patient_id/comprehensive
+// @access  Private
+exports.getComprehensiveProfile = async (req, res, next) => {
+    try {
+        if (!ensureDoctorSessionHasProfile(req, res)) return;
+        const { patient_id } = req.params;
+        const patient = await Patient.findOne({ patient_key: patient_id, is_deleted: false });
+        
+        if (!patient) {
+            return res.status(404).json({ success: false, message: 'Patient not found' });
+        }
+
+        const [appointments, mrd, feedbacks, map] = await Promise.all([
+            Appointment.find({ patient_id }).sort({ appointment_date: -1 }).lean(),
+            MRD.findOne({ patient_id }).lean(),
+            Feedback.find({ patient_id }).sort({ createdAt: -1 }).lean(),
+            LegacyPatientMap.findOne({ mrd_id: patient_id }).lean()
+        ]);
+
+        let legacy = { pid: null, prescriptions: [], vaccinations: [], child_history: [] };
+
+        if (map && map.pid) {
+            const pid = map.pid;
+            const [rx, vx, hx] = await Promise.all([
+                Prescription.find({ patientId: pid }).sort({ 'metadata.createdOn': -1 }).lean(),
+                Vaccination.find({ patientId: pid }).sort({ 'metadata.createdOn': -1 }).lean(),
+                ChildHistory.find({ PID: pid }).sort({ CreatedOn: -1 }).lean()
+            ]);
+            legacy = { pid, prescriptions: rx, vaccinations: vx, child_history: hx };
+        }
+
+        res.json({
+            success: true,
+            data: {
+                patient,
+                appointments,
+                mrd,
+                feedbacks,
+                legacy
+            }
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+

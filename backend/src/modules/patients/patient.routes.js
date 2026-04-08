@@ -13,7 +13,8 @@ const {
     getPatientStats,
     registerFromWhatsapp,
     registerFromForm,
-    getPatientByEmail
+    getPatientByEmail,
+    getComprehensiveProfile
 } = require('./patient.controller');
 const validate = require('../../middleware/validate');
 const { register, update } = require('./patient.validator');
@@ -39,6 +40,7 @@ router.post('/', validate(register), registerPatient);
 router.get('/', getPatients);
 
 // ── Patient-specific routes ──────────────────────────────────────────
+router.get('/:patient_id/comprehensive', getComprehensiveProfile);
 router.get('/:patient_id', getPatientById);
 router.put('/:patient_id', validate(update), updatePatient);
 router.delete('/:patient_id', deletePatient);
