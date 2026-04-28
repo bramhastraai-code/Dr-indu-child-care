@@ -13,6 +13,13 @@ const Prescription = require('../../models/Prescription');
 const Vaccination = require('../../models/Vaccination');
 const ChildHistory = require('../../models/ChildHistory');
 const Feedback = require('../../models/Feedback');
+
+const resolvePatientKey = async (id) => {
+    const byKey = await Patient.findOne({ patient_key: id, is_deleted: false }).select('patient_key').lean();
+    if (byKey?.patient_key) return byKey.patient_key;
+    const byPatientId = await Patient.findOne({ patient_id: id, is_deleted: false }).select('patient_key').lean();
+    return byPatientId?.patient_key || null;
+};
 // Helper: parse DD/MM/YYYY or YYYY-MM-DD to Date
 const parseDOB = (raw) => {
     if (!raw) return null;
@@ -735,6 +742,118 @@ exports.getComprehensiveProfile = async (req, res, next) => {
                 mrd,
                 feedbacks,
                 legacy
+            }
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+exports.getVitalsHistory = async (req, res, next) => {
+    try {
+        const patientKey = await resolvePatientKey(req.params.patient_id);
+        if (!patientKey) return res.status(404).json({ success: false, message: 'Patient not found' });
+        const mrd = await MRD.findOne({ patient_id: patientKey }).lean();
+        const data = (mrd?.entries || [])
+            .filter((entry) => entry.visit_date && (entry.weight || entry.height || entry.head_circumference))
+            .map((entry) => ({
+                visit_date: entry.visit_date,
+                weight: entry.weight || null,
+                height: entry.height || null,
+                head_circumference: entry.head_circumference || null
+            }))
+            .sort((a, b) => new Date(a.visit_date) - new Date(b.visit_date));
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        next(err);
+    }
+};
+
+exports.getAllergySummary = async (req, res, next) => {
+    try {
+        const patientKey = await resolvePatientKey(req.params.patient_id);
+        if (!patientKey) return res.status(404).json({ success: false, message: 'Patient not found' });
+        const mrd = await MRD.findOne({ patient_id: patientKey }).lean();
+        const fromEntries = (mrd?.entries || [])
+            .flatMap((entry) => {
+                const explicitAllergies = Array.isArray(entry.allergies) ? entry.allergies : [];
+                const historyAllergies = Array.isArray(entry.medication_history)
+                    ? entry.medication_history.filter((row) => row?.is_allergy).map((row) => row.medicine).filter(Boolean)
+                    : [];
+                return [...explicitAllergies, ...historyAllergies];
+            })
+            .map((v) => String(v).trim())
+            .filter(Boolean);
+        const unique = [...new Set(fromEntries)];
+        res.json({ success: true, count: unique.length, data: unique });
+    } catch (err) {
+        next(err);
+    }
+};
+
+exports.getCurrentMeds = async (req, res, next) => {
+    try {
+        const patientKey = await resolvePatientKey(req.params.patient_id);
+        if (!patientKey) return res.status(404).json({ success: false, message: 'Patient not found' });
+        const mrd = await MRD.findOne({ patient_id: patientKey }).lean();
+        const latest = (mrd?.entries || [])
+            .slice()
+            .sort((a, b) => new Date(b.visit_date) - new Date(a.visit_date))[0];
+        const meds = Array.isArray(latest?.medication_history)
+            ? latest.medication_history.filter((item) => item?.is_to_be_continued)
+            : [];
+        res.json({ success: true, count: meds.length, data: meds });
+    } catch (err) {
+        next(err);
+    }
+};
+
+exports.getPatientHistory = async (req, res, next) => {
+    try {
+        const patientKey = await resolvePatientKey(req.params.patient_id);
+        if (!patientKey) return res.status(404).json({ success: false, message: 'Patient not found' });
+
+        const [mrd, appointments] = await Promise.all([
+            MRD.findOne({ patient_id: patientKey }).lean(),
+            Appointment.find({ patient_id: patientKey, is_deleted: false })
+                .sort({ appointment_date: -1 })
+                .limit(50)
+                .lean()
+        ]);
+
+        const entries = (mrd?.entries || [])
+            .slice()
+            .sort((a, b) => new Date(b.visit_date) - new Date(a.visit_date))
+            .slice(0, 50)
+            .map((entry) => ({
+                entry_id: entry._id,
+                appointment_id: entry.appointment_id || null,
+                visit_date: entry.visit_date || null,
+                visit_type: entry.visit_type || null,
+                diagnosis: entry.diagnosis || null,
+                chief_complaint: entry.chief_complaint || null,
+                attending_doctor: entry.attending_doctor || null
+            }));
+
+        const timeline = [...entries.map((item) => ({ ...item, source: 'mrd' })), ...appointments.map((appt) => ({
+            source: 'appointment',
+            appointment_id: appt.appointment_id || null,
+            visit_date: appt.appointment_date || null,
+            visit_type: appt.visit_type || appt.visit_category || null,
+            diagnosis: null,
+            chief_complaint: appt.reason || null,
+            attending_doctor: appt.doctor_name || appt.assigned_doctor_name || null
+        }))]
+            .sort((a, b) => new Date(b.visit_date) - new Date(a.visit_date))
+            .slice(0, 100);
+
+        res.json({
+            success: true,
+            data: {
+                patient_id: patientKey,
+                mrd_entries: entries,
+                appointments,
+                timeline
             }
         });
     } catch (err) {

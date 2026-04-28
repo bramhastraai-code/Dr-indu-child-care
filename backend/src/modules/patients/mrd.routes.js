@@ -10,7 +10,8 @@ const {
     addVaccinationRecord,
     lockMRDEntry,
     uploadMRDAttachment,
-    sendPrescriptionViaWhatsApp
+    sendPrescriptionViaWhatsApp,
+    getMRDEntryPdf
 } = require('./mrd.controller');
 const auth = require('../../middleware/auth');
 const authorize = require('../../middleware/rbac');
@@ -22,6 +23,7 @@ router.patch('/entry/:id', updateMRDEntry);
 router.get('/appointment/:appointment_id', getEntryByAppointment);
 router.patch('/entry/:id/lock', lockMRDEntry);
 router.post('/entry/:id/attachment', uploadMRDAttachment);
+router.get('/entry/:id/pdf', getMRDEntryPdf);
 router.post('/entry/:id/send-whatsapp', sendPrescriptionViaWhatsApp);
 
 router.get('/:patient_id/export', exportMRD);

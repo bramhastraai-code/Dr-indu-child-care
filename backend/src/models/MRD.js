@@ -56,6 +56,39 @@ const MRDEntrySchema = new mongoose.Schema({
     pulse: { type: String, default: null },
     head_circumference: { type: String, default: null },
     symptoms: { type: [String], default: [] },
+    allergies: { type: [String], default: [] },
+    provisional_diagnoses: [{
+        code: { type: String, default: null },
+        diagnosis: { type: String, default: null },
+        stage: { type: String, default: null },
+        type: { type: String, default: null },
+        notes: { type: String, default: null }
+    }],
+    prescriptions_list: [{
+        medicine: { type: String, default: null },
+        generic_name: { type: String, default: null },
+        dosage: { type: String, default: null },
+        schedule: { type: String, default: null },
+        route: { type: String, default: null },
+        instruction: { type: String, default: null },
+        days: { type: Number, default: null }
+    }],
+    investigations_list: [{
+        test_name: { type: String, default: null },
+        priority: { type: String, default: null },
+        notes: { type: String, default: null }
+    }],
+    medication_history: [{
+        medicine: { type: String, default: null },
+        dosage: { type: String, default: null },
+        is_to_be_continued: { type: Boolean, default: false },
+        notes: { type: String, default: null }
+    }],
+    family_diseases: [{
+        disease: { type: String, default: null },
+        relationship: { type: String, default: null },
+        notes: { type: String, default: null }
+    }],
     next_visit_due: {
         type: Date,
         default: null
@@ -92,7 +125,8 @@ const MRDEntrySchema = new mongoose.Schema({
         url: { type: String, required: true },
         name: { type: String, default: 'attachment' },
         file_type: { type: String, default: 'image/jpeg' },
-        uploaded_at: { type: Date, default: Date.now }
+        uploaded_at: { type: Date, default: Date.now },
+        size: { type: Number, default: null }
     }]
 });
 

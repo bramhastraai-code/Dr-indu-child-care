@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const morgan = require('morgan');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
+const path = require('path');
 
 const corsMiddleware = require('./middleware/cors');
 const setupSwagger = require('./swagger');
@@ -29,6 +30,7 @@ app.use(helmet({
 // Body parser
 app.use(express.json({ limit: '10mb' })); // Allow Base64 photo and attachment uploads
 app.use(cookieParser());
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Dev logging middleware
 if (process.env.NODE_ENV === 'development') {
@@ -64,6 +66,8 @@ app.use('/api/doctors', require('./modules/doctors/doctor.routes'));
 app.use('/api/doctor', require('./modules/doctors/availability.routes'));
 app.use('/api/token-config', require('./modules/system/tokenConfig.routes'));
 app.use('/api/referring-doctors', require('./modules/system/referringDoctor.routes'));
+app.use('/api/referrals', require('./modules/system/referrals.routes'));
+app.use('/api/clinical', require('./modules/clinical/clinical.routes'));
 
 // New modules v1.1.0
 app.use('/api/notifications', require('./modules/system/notifications.routes'));

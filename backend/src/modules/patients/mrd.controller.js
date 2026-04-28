@@ -2,6 +2,8 @@ const MRD = require('../../models/MRD');
 const Appointment = require('../../models/Appointment');
 const Patient = require('../../models/Patient');
 const PrescriptionDeliveryLog = require('../../models/PrescriptionDeliveryLog');
+const fs = require('fs');
+const path = require('path');
 const audit = require('../../utils/audit');
 const {
     getDoctorIdFromSession,
@@ -10,6 +12,107 @@ const {
 } = require('../../utils/doctorScope');
 
 const { triggerWebhook } = require('../../services/webhookService');
+
+const uploadsRoot = path.join(process.cwd(), 'uploads', 'mrd');
+
+const safeFilename = (value, fallback = 'attachment') => {
+    const candidate = String(value || fallback).trim();
+    return candidate.replace(/[^a-zA-Z0-9._-]/g, '_');
+};
+
+const extensionFromMime = (mime = '') => {
+    const normalized = String(mime).toLowerCase();
+    if (normalized.includes('png')) return 'png';
+    if (normalized.includes('pdf')) return 'pdf';
+    if (normalized.includes('webp')) return 'webp';
+    return 'jpg';
+};
+
+const storeAttachment = (patientId, entryId, attachment = {}) => {
+    if (!attachment || typeof attachment !== 'object') return null;
+    if (attachment.url && !attachment.base64) {
+        return {
+            url: attachment.url,
+            name: attachment.name || 'attachment',
+            file_type: attachment.file_type || 'application/octet-stream',
+            uploaded_at: new Date(),
+            size: attachment.size || null
+        };
+    }
+
+    const rawBase64 = attachment.base64 || attachment.data || '';
+    if (typeof rawBase64 !== 'string' || !rawBase64.trim()) return null;
+
+    const dataOnly = rawBase64.includes(',') ? rawBase64.split(',').pop() : rawBase64;
+    const mimeMatch = rawBase64.match(/^data:([^;]+);base64,/);
+    const fileType = attachment.file_type || (mimeMatch ? mimeMatch[1] : 'image/jpeg');
+    const ext = extensionFromMime(fileType);
+    const fileName = `${Date.now()}-${safeFilename(attachment.name, 'attachment')}.${ext}`;
+    const dirPath = path.join(uploadsRoot, safeFilename(patientId), safeFilename(entryId));
+
+    fs.mkdirSync(dirPath, { recursive: true });
+    const filePath = path.join(dirPath, fileName);
+    const buffer = Buffer.from(dataOnly, 'base64');
+    fs.writeFileSync(filePath, buffer);
+
+    return {
+        url: `/uploads/mrd/${safeFilename(patientId)}/${safeFilename(entryId)}/${fileName}`,
+        name: attachment.name || fileName,
+        file_type: fileType,
+        uploaded_at: new Date(),
+        size: buffer.length
+    };
+};
+
+const normalizeAttachments = (patientId, entryId, attachments = []) => {
+    if (!Array.isArray(attachments)) return [];
+    return attachments
+        .map((item) => storeAttachment(patientId, entryId, item))
+        .filter(Boolean);
+};
+
+const buildPrescriptionPdfBuffer = ({ patient, entry }) => {
+    const lines = [
+        'Clinical Record',
+        `Patient: ${patient?.child_name || 'Unknown'}`,
+        `Parent: ${patient?.parent_name || patient?.father_name || patient?.mother_name || '-'}`,
+        `Visit Date: ${new Date(entry.visit_date).toLocaleDateString()}`,
+        `Doctor: ${entry.attending_doctor || '-'}`,
+        '',
+        `Diagnosis: ${entry.diagnosis || '-'}`,
+        `Clinical Notes: ${entry.clinical_notes || '-'}`,
+        `Advice: ${entry.advice || '-'}`,
+        '',
+        'Prescription:',
+        entry.prescription || '-'
+    ];
+    const escaped = lines.map((line) => String(line).replace(/[()\\]/g, '\\$&'));
+    const content = escaped.map((line, idx) => `BT /F1 11 Tf 40 ${780 - (idx * 16)} Td (${line}) Tj ET`).join('\n');
+    const stream = `${content}\n`;
+    const streamLen = Buffer.byteLength(stream, 'utf8');
+
+    const pdf = `%PDF-1.4
+1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj
+2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj
+3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>endobj
+4 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj
+5 0 obj<< /Length ${streamLen} >>stream
+${stream}endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000010 00000 n 
+0000000063 00000 n 
+0000000122 00000 n 
+0000000249 00000 n 
+0000000320 00000 n 
+trailer<< /Size 6 /Root 1 0 R >>
+startxref
+${320 + streamLen + 35}
+%%EOF`;
+    return Buffer.from(pdf, 'utf8');
+};
 
 const ensureDoctorCanAccessPatient = async (req, res, patientId, message = 'Access denied for this patient profile') => {
     // Doctors can now access any patient MRD. Scoping is removed for viewing.
@@ -154,6 +257,7 @@ exports.addMRDEntry = async (req, res, next) => {
             pulse,
             head_circumference,
             symptoms,
+            allergies,
             attachments
         } = req.body || {};
 
@@ -215,10 +319,18 @@ exports.addMRDEntry = async (req, res, next) => {
             pulse,
             head_circumference,
             symptoms: Array.isArray(symptoms) ? symptoms : [],
-            attachments: Array.isArray(attachments) ? attachments : []
+            allergies: Array.isArray(allergies) ? allergies : [],
+            provisional_diagnoses: Array.isArray(req.body?.provisional_diagnoses) ? req.body.provisional_diagnoses : [],
+            prescriptions_list: Array.isArray(req.body?.prescriptions_list) ? req.body.prescriptions_list : [],
+            investigations_list: Array.isArray(req.body?.investigations_list) ? req.body.investigations_list : [],
+            medication_history: Array.isArray(req.body?.medication_history) ? req.body.medication_history : [],
+            family_diseases: Array.isArray(req.body?.family_diseases) ? req.body.family_diseases : [],
+            attachments: []
         };
 
         mrd.entries.unshift(newEntry);
+        const insertedEntry = mrd.entries[0];
+        insertedEntry.attachments = normalizeAttachments(patient_id, insertedEntry._id, attachments);
         await mrd.save();
 
         if (appointment_id) {
@@ -289,12 +401,17 @@ exports.updateMRDEntry = async (req, res, next) => {
             'diagnosis', 'prescription', 'advice', 'clinical_notes',
             'chief_complaint', 'investigations', 'next_visit_due',
             'vaccine_given', 'vaccine_batch',
-            'weight', 'height', 'temperature', 'spo2', 'pulse', 'head_circumference', 'symptoms', 'attachments'
+            'weight', 'height', 'temperature', 'spo2', 'pulse', 'head_circumference', 'symptoms',
+            'allergies',
+            'provisional_diagnoses', 'prescriptions_list', 'investigations_list', 'medication_history', 'family_diseases'
         ];
 
         updateable.forEach(f => {
             if (body[f] !== undefined) entry[f] = body[f];
         });
+        if (body.attachments !== undefined) {
+            entry.attachments = normalizeAttachments(mrd.patient_id, entry._id, body.attachments);
+        }
 
         entry.last_edited_by = actor;
         entry.last_edited_at = new Date();
@@ -465,7 +582,7 @@ exports.uploadMRDAttachment = async (req, res, next) => {
         if (!ensureDoctorSessionHasProfile(req, res)) return;
 
         const { id } = req.params;
-        const { url, name, file_type, attachments } = req.body || {};
+        const { url, name, file_type, base64, attachments } = req.body || {};
 
         const mrd = await MRD.findOne({ 'entries._id': id });
         if (!mrd) return res.status(404).json({ success: false, message: 'Entry not found' });
@@ -477,31 +594,38 @@ exports.uploadMRDAttachment = async (req, res, next) => {
 
         // Handle multiple attachments
         if (Array.isArray(attachments) && attachments.length > 0) {
-            attachments.forEach(att => {
-                if (att.url) {
-                    entry.attachments.push({
-                        url: att.url,
-                        name: att.name || 'attachment',
-                        file_type: att.file_type || 'image/jpeg',
-                        uploaded_at: new Date()
-                    });
-                }
-            });
+            normalizeAttachments(mrd.patient_id, entry._id, attachments).forEach(att => entry.attachments.push(att));
         }
         // Handle single attachment
-        else if (url) {
-            entry.attachments.push({
-                url,
-                name: name || 'attachment',
-                file_type: file_type || 'image/jpeg',
-                uploaded_at: new Date()
-            });
+        else if (url || base64) {
+            const normalized = storeAttachment(mrd.patient_id, entry._id, { url, name, file_type, base64 });
+            if (normalized) entry.attachments.push(normalized);
         } else {
-            return res.status(400).json({ success: false, message: 'No attachments provided. Use url or attachments array.' });
+            return res.status(400).json({ success: false, message: 'No attachments provided. Use url/base64 or attachments array.' });
         }
 
         await mrd.save();
         res.json({ success: true, message: 'Attachments uploaded successfully', data: entry.attachments });
+    } catch (err) {
+        next(err);
+    }
+};
+
+// @desc    Download printable PDF for MRD entry
+// @route   GET /api/mrd/entry/:id/pdf
+exports.getMRDEntryPdf = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const mrd = await MRD.findOne({ 'entries._id': id });
+        if (!mrd) return res.status(404).json({ success: false, message: 'Entry not found' });
+        const entry = mrd.entries.id(id);
+        const patient = await Patient.findOne({ patient_id: mrd.patient_id }).lean();
+        if (!patient) return res.status(404).json({ success: false, message: 'Patient not found' });
+
+        const pdfBuffer = buildPrescriptionPdfBuffer({ patient, entry });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="clinical-entry-${id}.pdf"`);
+        return res.status(200).send(pdfBuffer);
     } catch (err) {
         next(err);
     }
@@ -530,8 +654,10 @@ exports.sendPrescriptionViaWhatsApp = async (req, res, next) => {
         const prescriptionText = entry.prescription ? `*Prescription:*\n${entry.prescription}` : '';
         const adviceText = entry.advice ? `*Advice:*\n${entry.advice}` : '';
         const visitDate = new Date(entry.visit_date).toLocaleDateString();
+        const apiBase = process.env.PUBLIC_API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+        const pdfUrl = `${apiBase}/api/mrd/entry/${id}/pdf`;
 
-        const fullMessage = `Hi ${patient.parent_name || 'Parent'},\nPrescription for *${patient.child_name}* (Visit: ${visitDate}):\n\n${prescriptionText}\n\n${adviceText}\n\nRegards,\nDr. Indu's Child Care`;
+        const fullMessage = `Hi ${patient.parent_name || 'Parent'},\nPrescription for *${patient.child_name}* (Visit: ${visitDate}):\n\n${prescriptionText}\n\n${adviceText}\n\nDownload PDF: ${pdfUrl}\n\nRegards,\nDr. Indu's Child Care`;
 
         // Send prescription via n8n webhook
         await triggerWebhook('appointment', {
@@ -541,7 +667,8 @@ exports.sendPrescriptionViaWhatsApp = async (req, res, next) => {
             child_name: patient.child_name,
             date: visitDate,
             wa_id: patient.wa_id,
-            message: fullMessage
+            message: fullMessage,
+            pdf_url: pdfUrl
         });
 
         await audit({
