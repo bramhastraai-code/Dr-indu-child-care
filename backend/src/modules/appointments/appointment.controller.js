@@ -17,6 +17,7 @@ const {
 } = require('../../utils/doctorScope');
 const axios = require('axios');
 const { triggerWebhook } = require('../../services/webhookService');
+const { displayNameFromDoc } = require('../../utils/patientDisplay');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -282,13 +283,15 @@ exports.assignTokensForDate = assignTokensForDate;
 
 const enrichAppointment = async (a) => {
     const [patient, mrdEntry] = await Promise.all([
-        Patient.findOne({ patient_id: a.patient_id }),
+        Patient.findOne({ patient_key: a.patient_id, is_deleted: false }),
         MRD.findOne({ 'entries.appointment_id': a.appointment_id })
     ]);
+    const patientName = displayNameFromDoc(patient);
     return {
         ...a.toObject(),
-        child_name: patient?.full_name || patient?.child_name || null,
-        parent_name: patient?.parent_name || null,
+        child_name: patientName,
+        patient_name: patientName,
+        parent_name: patient?.mother_name || patient?.father_name || null,
         wa_id: a.wa_id || patient?.wa_id || null,
         formatted_date: a.appointment_date ? a.appointment_date.toISOString().split('T')[0] : null,
         start_time: a.appointment_time || null,
@@ -385,7 +388,7 @@ exports.createAppointment = async (req, res, next) => {
         // Resolve patient
         let patient;
         if (patient_id) {
-            patient = await Patient.findOne({ patient_id, is_deleted: false });
+            patient = await Patient.findOne({ patient_key: patient_id, is_deleted: false });
         } else if (mobile || wa_id) {
             const lookupValue = wa_id || mobile;
             const normalized = normalizeWaId(lookupValue);
@@ -907,7 +910,7 @@ exports.bookByWhatsapp = async (req, res) => {
         let patient = null;
 
         if (req_patient_id) {
-            patient = await Patient.findOne({ patient_id: req_patient_id, is_deleted: false });
+            patient = await Patient.findOne({ patient_key: req_patient_id, is_deleted: false });
         } else {
             const patients = await Patient.find({ wa_hash, is_deleted: false });
 

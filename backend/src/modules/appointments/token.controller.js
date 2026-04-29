@@ -13,6 +13,7 @@ const {
 } = require('../../utils/doctorScope');
 const { getDoctorShiftConfig } = require('../../utils/tokenHelpers');
 const { triggerWebhook } = require('../../services/webhookService');
+const { fetchPatientNameMap } = require('../../utils/patientDisplay');
 
 // Helper: Update doctor consultation rolling average
 const updateDoctorConsultationStats = async (doctor_id, durationMinutes) => {
@@ -135,13 +136,9 @@ exports.getDailyTokens = async (req, res) => {
             .sort({ doctor_id: 1, token_number: 1 })
             .lean();
 
-        // Enrich with patient names
+        // Enrich with patient names (Appointment.patient_id === Patient.patient_key)
         const patientIds = [...new Set(appointments.map(a => a.patient_id))];
-        const patients = await Patient.find({ patient_id: { $in: patientIds } })
-            .select('patient_id child_name full_name')
-            .lean();
-        const patientMap = {};
-        patients.forEach(p => { patientMap[p.patient_id] = p.child_name || p.full_name; });
+        const patientMap = await fetchPatientNameMap(patientIds);
 
         // Group by doctor to calculate approx_time dynamically
         const docs = await Doctor.find({ is_active: true }).lean();
@@ -223,6 +220,7 @@ exports.getDailyTokens = async (req, res) => {
             _id: a._id,
             patient_id: a.patient_id,
             child_name: patientMap[a.patient_id] || null,
+            patient_name: patientMap[a.patient_id] || null,
             token: a.token_number,
             token_display: a.token_display,
             token_number: a.token_number,
@@ -271,10 +269,7 @@ exports.getClinicDisplay = async (req, res) => {
         }).sort({ doctor_id: 1, token_number: 1 }).lean();
 
         const patientIds = [...new Set(activeTokens.map(a => a.patient_id))];
-        const patients = await Patient.find({ patient_id: { $in: patientIds } })
-            .select('patient_id child_name').lean();
-        const pMap = {};
-        patients.forEach(p => { pMap[p.patient_id] = p.child_name; });
+        const pMap = await fetchPatientNameMap(patientIds);
 
         // Build per-doctor display data
         const doctors = await Doctor.find({ is_active: true }).lean();
@@ -288,13 +283,16 @@ exports.getClinicDisplay = async (req, res) => {
                 ...drTokens.filter(t => t.token_status === 'WAITING')
             ];
 
+            const nextWaiting = waiting[0];
             return {
                 doctor_id: dr.doctor_id,
                 doctor_name: dr.name,
                 speciality: dr.speciality,
                 now_serving_token: nowServing?.token_number || null,
                 now_serving_patient: nowServing ? pMap[nowServing.patient_id] : null,
-                next_token: waiting[0]?.token_number || null,
+                now_serving_patient_name: nowServing ? pMap[nowServing.patient_id] : null,
+                next_token: nextWaiting?.token_number || null,
+                next_waiting_patient: nextWaiting ? pMap[nextWaiting.patient_id] : null,
                 queue_length: waiting.length,
                 status: avail.status || 'PRESENT',
                 eta_time: avail.eta_time || 'No Delay'
@@ -369,11 +367,19 @@ exports.getNextToken = async (req, res) => {
             token_status: { $in: ['WAITING', 'CHECKED_IN'] }
         });
 
+        let patientName = null;
+        if (nextPatient?.patient_id) {
+            const nameMap = await fetchPatientNameMap([nextPatient.patient_id]);
+            patientName = nameMap[nextPatient.patient_id] || null;
+        }
+
         res.json({
             success: true,
             current_token: nextPatient?.token_number || null,
             appointment_id: nextPatient?.appointment_id || null,
             patient_id: nextPatient?.patient_id || null,
+            child_name: patientName,
+            patient_name: patientName,
             remaining_queue: remaining,
             message: nextPatient ? `Now serving token ${nextPatient.token_number}` : 'No more patients in queue'
         });
@@ -460,6 +466,9 @@ exports.getTokenStatus = async (req, res) => {
         const appt = await Appointment.findOne(filter).lean();
         if (!appt) return res.status(404).json({ success: false, message: `Token ${token} not found` });
 
+        const nameMap = appt.patient_id ? await fetchPatientNameMap([appt.patient_id]) : {};
+        const patientName = nameMap[appt.patient_id] || null;
+
         // Position in queue: relative to CHECKED_IN users (who are waiting)
         const positionFilter = {
             doctor_id: appt.doctor_id,
@@ -479,6 +488,9 @@ exports.getTokenStatus = async (req, res) => {
             success: true,
             data: {
                 token_number: appt.token_number,
+                patient_id: appt.patient_id,
+                child_name: patientName,
+                patient_name: patientName,
                 token_status: appt.token_status,
                 appointment_id: appt.appointment_id,
                 doctor_name: appt.doctor_name,
@@ -720,7 +732,7 @@ exports.notifyDelay = async (req, res) => {
 
         let count = 0;
         for (const appt of appointments) {
-            const patient = await Patient.findOne({ patient_id: appt.patient_id }).lean();
+            const patient = await Patient.findOne({ patient_key: appt.patient_id, is_deleted: false }).lean();
             if (!patient) continue;
 
             const wa_id = appt.wa_id || patient.wa_id || patient.parent_mobile;
